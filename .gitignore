@@ -1,0 +1,53 @@
+# Whitelist model: ignore EVERYTHING, then re-include only authored config.
+# A live ~/.claude is full of secrets — credentials, chat history, session
+# transcripts, caches, telemetry. This keeps all of that OUT of git by default,
+# so you can version your config in place without leaking anything.
+#
+# This repo (the public template) only contains the authored files below. When
+# you install it as your real ~/.claude, this same .gitignore keeps your private
+# state untracked.
+/*
+
+# --- re-included: the config we actually want to version ---
+!/.gitignore
+!/README.md
+!/LICENSE
+!/CLAUDE.md
+!/settings.json
+!/rules/
+!/commands/
+!/agents/
+!/hooks/
+!/bin/
+!/skills/
+!/docs/
+
+# NOTE: the re-includes above whitelist whole directories, so files placed
+# *inside* a versioned dir ARE tracked. The pattern ignores below are what
+# actually keep secrets/caches out even there — never rely on the top-level
+# catch-all alone for anything under a versioned dir.
+
+# Credential/secret shapes — never track, even inside a versioned dir.
+*.env
+*.key
+*.pem
+*.crt
+*.p12
+id_rsa*
+
+# python build artifacts + tool caches under hooks/
+__pycache__/
+*.pyc
+.mypy_cache/
+.ruff_cache/
+
+# Belt-and-suspenders: never track auto-managed local state even if a rule widens.
+.credentials.json
+history.jsonl
+sessions/
+projects/
+
+# Your personalized copies of the templates (keep YOUR versions private if you like).
+# Delete these two lines if you want to version your own voice.md / infra.md here.
+rules/voice.md
+rules/infra.md

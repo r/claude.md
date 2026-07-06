@@ -1,0 +1,52 @@
+# Infrastructure / ops — TEMPLATE
+
+> Copy this to `infra.md` and fill in your own hosts and topology. Load it whenever the work touches
+> live infrastructure — a server over SSH, Docker, networking, storage, DNS. The **safe-change
+> protocol** below is the reusable heart of it and needs almost no customization; the host map is
+> yours to write. **Never put credentials in this file — reference where they live.**
+
+## Hosts (fill in your own)
+
+Keep a table so the agent (and you) always know what's what. Example shape:
+
+| Host | Address | Role |
+|------|---------|------|
+| `<host-a>` | `<addr>` | e.g. primary Docker host — config source of truth in `<path>` |
+| `<host-b>` | `<addr>` | e.g. second resolver / replication target |
+| `<gateway>` | `<addr>` | e.g. router/firewall — VLANs, DNS |
+
+**Facts here drift. Verify against the live host before you rely on them.**
+
+## The safe-change protocol (networking, firewall, storage, DNS, containers)
+
+This is the spine. For any change to live infrastructure:
+
+1. **Discover current state first, and say it back.** For firewall/routing, analyze the actual
+   traffic flows before proposing anything. Ground the change in what's really there, not what you
+   assume.
+2. **Propose the most minimal change** that meets the goal. Keep everything else behaving identically.
+3. **Default to reversible + observe-only.** New firewall rules start in logging mode; behavior
+   changes are a *separate, explicit* step. Back up any config you replace (timestamped) and state
+   the exact rollback before touching anything.
+4. **No unattended flips.** If something is meant to be reviewed "in a week," set it up so it's inert
+   until you come back — never a timer that changes behavior or fills a disk on its own.
+5. **Say which host you're on** before any mutating command. (The `session_start` hook and status
+   line help; the `/whereami` command confirms on demand.)
+6. **Prefer supported config integrations over hacks;** never defeat protections (cert pinning, 2FA).
+7. **For a non-trivial change, get a fresh-eyes pre-flight review** — delegate to the
+   **infra-reviewer** agent. It checks blast radius, reversibility, host-correctness, and the
+   "how do we know we got it right" verification steps *before* you apply.
+
+## Why infra never loops
+
+The autonomy slider (see `loops.md`) runs *hot* for software because rollback is `git reset` and a
+gate catches regressions. Infra is the **cold** end: its "checker" is production, and a bad step can
+take down DNS, the network, or storage for everyone. So infra changes go through this protocol —
+one reviewed, reversible, observe-first step at a time — and are **never** put in an autonomous loop.
+
+## Intent maps (optional but worth it)
+
+For anything with non-obvious policy — a firewall, VLAN layout, DNS design — keep a short document of
+the *intent* (the "why"), separate from the live config (the "what"). When you later change a rule,
+the intent map tells you whether the change respects the original design or quietly breaks it. Point
+the infra-reviewer at it so it can flag contradictions with stated policy.

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# morph-mirror — mirror a just-made git commit into morph, when a project uses it.
+#
+# Morph (https://r.github.io/morph/) is an AI-native VCS layer that lives in a
+# project's .morph/ alongside git. We treat git as the source of truth and morph
+# as an opt-in mirror, so this helper is deliberately unobtrusive:
+#
+#   * No-op unless we're in a git work tree that ALSO has a top-level .morph/.
+#   * NEVER fails the caller. By the time this runs the git commit already
+#     happened; a morph problem must not undo or block that. Worst case: a
+#     warning on stderr and exit 0.
+#   * If .morph/ exists but the `morph` binary is missing (a machine where morph
+#     isn't installed yet), say so loudly with an install nudge and exit 0. That
+#     warning IS the "get morph installed" signal.
+#
+# Usage:  morph-mirror "<the same commit message you passed to git commit>"
+set -u
+
+msg=${1:-}
+if [ -z "$msg" ]; then
+  echo "morph-mirror: refusing to mirror with an empty message" >&2
+  exit 0
+fi
+
+# Only meaningful inside a git work tree.
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+# Not a morph project → nothing to mirror, and nothing to say.
+[ -d "$root/.morph" ] || exit 0
+
+host=$(hostname 2>/dev/null || echo this-host)
+name=$(basename "$root")
+
+if ! command -v morph >/dev/null 2>&1; then
+  echo "⚠️  morph: '$name' has .morph/ but 'morph' is not installed on ${host}." >&2
+  echo "    The git commit succeeded but was NOT mirrored to morph." >&2
+  echo "    Install, then re-mirror:  brew tap r/morph && brew install morph && morph commit -m \"…\"" >&2
+  exit 0
+fi
+
+# --- The actual mirror. Isolated in one place so it is trivial to reconcile with
+# --- morph's real CLI once morph is installed and we've read `morph commit --help`
+# --- (e.g. whether a staging step like `morph add -A` is needed first).
+if ! morph commit -m "$msg"; then
+  echo "⚠️  morph: 'morph commit' failed in '$name'. git is fine; morph is now out of sync." >&2
+  exit 0
+fi

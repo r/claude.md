@@ -1,0 +1,92 @@
+# Safety rules for the PreToolUse guardrail (hooks/guardrail.py).
+#
+# Each rule has:
+#   action: deny | ask
+#   why:    short human explanation
+#   all:    list of regexes that must ALL match for the rule to fire
+#
+# `bash` rules are matched against each command SEGMENT (split on ; & | newline)
+# after leading sudo/env/wrappers are stripped, so a `^` anchors to the start of
+# an actual command — prose mentions of dangerous words (e.g. in a commit
+# message) don't trip it. `write` rules scan Write/Edit/MultiEdit content.
+#
+# To tune the guardrail, edit THIS file — no code changes needed.
+
+bash:
+  # --- deny: catastrophic, essentially never legitimate via Claude ---
+  - action: deny
+    why: recursive force-rm of a system root
+    all:
+      - '^rm\b'
+      - '-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r|(?:--recursive\b.*--force|--force\b.*--recursive)'
+      - '(?:^|\s)(?:/|/\*|~|~/\*|\$HOME|\$\{HOME\}|/home|/mnt|/etc|/var|/usr|/bin|/lib|/boot|/root|/opt|/sys|/proc)(?:/\*)?(?:\s|$)'
+  - action: deny
+    why: mkfs would format a filesystem
+    all: ['^mkfs(?:\.\w+)?\s+\S']
+  - action: deny
+    why: dd writing directly to a disk device
+    all: ['^dd\s+\S', '\bof=/dev/(?:sd|nvme|vd|mmcblk|disk)']
+  - action: deny
+    why: recursive chmod 777 on /
+    all: ['^chmod\s+-R\s+0*777\s+/(?:\s|$)']
+  - action: deny
+    # The classic bomb `:(){ :|:& };:` contains ; & | — which are exactly the
+    # command-segment separators guardrail.py splits on — so a full-string
+    # pattern can never match a post-split segment. Match instead on the
+    # colon-function *definition* `:(){`, which lands intact in the first
+    # segment and is essentially never legitimate.
+    why: fork bomb (colon-function definition)
+    all: ['^:\s*\(\s*\)\s*\{']
+  - action: deny
+    why: redirecting output onto a disk device
+    all: ['>\s*/dev/(?:sd|nvme|vd|mmcblk|disk)']
+
+  # --- ask: destructive but sometimes legitimate (force a confirmation) ---
+  - action: ask
+    why: zfs destroy removes a dataset/snapshot
+    all: ['^zfs\s+destroy\s+\S']
+  - action: ask
+    why: zpool destroy removes an entire pool
+    all: ['^zpool\s+destroy\s+\S']
+  - action: ask
+    why: docker system prune -a removes all unused images
+    all: ['^docker\s+system\s+prune\b.*(?:-a|--all)']
+  - action: ask
+    # `docker volume prune` needs no argument (it prunes ALL unused volumes), so
+    # require an arg only for `rm`; bare `prune` is the dangerous form to catch.
+    why: removing docker volumes can delete stateful data
+    all: ['^docker\s+volume\s+(?:prune\b|rm\s+\S)']
+  - action: ask
+    why: git push --force can overwrite remote history
+    all: ['^git\b.*\bpush\b.*--force(?!-with-lease)']
+
+  # --- ask: agency — Claude must not do these on my behalf without a nod.
+  # These promote the CLAUDE.md "never commit/push/flip unattended without ok"
+  # rules from prose into a deterministic stop (fires even in bypass mode).
+  # Anchored to the git SUBCOMMAND so `git log --grep commit` doesn't trip.
+  - action: ask
+    why: committing on your behalf (you approve commits explicitly)
+    all: ['^git\s+(?:-C\s+\S+\s+|-c\s+\S+\s+)*commit\b']
+  - action: ask
+    why: pushing publishes your work to a remote
+    all: ['^git\s+(?:-C\s+\S+\s+|-c\s+\S+\s+)*push\b']
+  - action: ask
+    why: 'crontab -e/-r or install schedules an unattended job (crontab -l is read-only)'
+    all: ['^crontab\b(?!.*\s-l(?:\s|$))']
+  - action: ask
+    why: '`at` schedules a command to run later, unattended'
+    all: ['^at\s']
+  - action: ask
+    why: enabling or starting a systemd timer arms an unattended job
+    all: ['^systemctl\b', '\b(?:enable|start)\b', '\.timer(?:\s|$)']
+  - action: ask
+    why: 'systemd-run --on-* schedules a transient unattended job'
+    all: ['^systemd-run\b', '--on-']
+
+write:
+  - action: ask
+    why: a private key
+    all: ['-----BEGIN (?:OPENSSH |RSA |EC |DSA |PGP )?PRIVATE KEY-----']
+  - action: ask
+    why: an AWS secret access key
+    all: ['aws_secret_access_key\s*=\s*[A-Za-z0-9/+]{30,}']

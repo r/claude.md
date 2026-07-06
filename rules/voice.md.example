@@ -1,0 +1,64 @@
+# Your writing voice — TEMPLATE
+
+> Copy this to `voice.md` and make it yours. It's the artifact the **editor** agent reads and that
+> `knowledge-work.md` points to, so an AI can draft and critique in *your* voice instead of the
+> flat, hedgy house style every model defaults to. Load it whenever the work is prose.
+>
+> **How to fill it well:** don't write it from scratch by memory. Point an agent at 10–20 things
+> you've actually written (posts, emails, memos — a folder, some URLs, or your sent-mail via an
+> agent that can reach it) and ask it to derive this profile: tone by medium, sentence rhythm, the
+> words you reach for and the ones you avoid, how you open and close, your taboos. Then edit what it
+> gives you. The examples below are illustrative placeholders — replace every one.
+
+## First rule: medium before everything
+
+Most people have (at least) two voices and both are correct. Name yours so the editor never
+homogenizes them.
+
+- **Published prose** (essay, post, newsletter) — usually your most codified, strict register.
+- **Casual** (chat, quick email) — looser: lowercase, fragments, shorthand, punctuation you'd never
+  use in an essay.
+
+**Tell the editor never to launder one into the other.** If it capitalizes and de-slangs your Slack
+message, it has made it *not you*. If the medium is unstated, infer it; when ambiguous, ask.
+
+## Register by medium (fill in)
+
+| Medium | Voice |
+|--------|-------|
+| **Essay / post / newsletter** | e.g. *Confident, declarative. Conclusion first, then evidence. Never gushes. Closes on a question, not a summary.* |
+| **Email / memo** | e.g. *Composed but warm. Bullets for asks. Full context, not terse commands.* |
+| **Chat / DM** | e.g. *Lowercase, fast, fragments. One thought per line. Typos stay.* |
+| **Spoken / talk** | *(Leave a note if you have no good sample — tell the editor to ask rather than fake a cadence.)* |
+
+## Published-prose rules (your strict register)
+
+State these as hard rules — the editor treats a violation as a defect.
+
+**Taboos — list the things you never do in polished prose. Examples to adapt:**
+- Filler words you cut on sight (e.g. "genuinely," "honestly," "actually," "it turns out").
+- Punctuation bans (e.g. no em-dashes; no exclamation marks; no emoji) — or the opposite, if that's you.
+- Formatting rules (e.g. sentence case only; no section headers in essays; no stacked rhetorical questions).
+- Evidence rules (e.g. no unattributed numbers; contested claims get attributed, not stated as settled).
+
+**Structure — how you build a piece. Examples to adapt:**
+- How you open (e.g. *on a tension or contradiction, never chronology*).
+- How you argue (e.g. *show, don't assert — a real example narrated line by line*).
+- How you close (e.g. *on the heaviest item or a real question, never a tidy bow*).
+
+**Rhythm:** describe your sentence music (e.g. *payoff-first; the occasional one-word sentence as a
+beat; transitions written as turns*).
+
+**Metaphor / analogy:** your rules (e.g. *heavy user, but metaphor families must not mix*).
+
+**Jargon:** your tolerance and how you handle it (e.g. *define the term with a vivid image, then use it*).
+
+## Diction
+
+- **Reaches for:** the words, phrases, and framings that are characteristically you.
+- **Avoids:** words and tics that read as not-you (buzzwords, clichés, specific pet-peeve words).
+
+## Recurring frames
+
+The ideas, themes, and reference points you return to — so drafts sound like they came from your head,
+not a generic one.
