@@ -10,7 +10,10 @@
 
 # --- re-included: the config we actually want to version ---
 !/.gitignore
+!/.gitattributes
 !/README.md
+!/INSTALL.md
+!/install.sh
 !/LICENSE
 !/CLAUDE.md
 !/settings.json

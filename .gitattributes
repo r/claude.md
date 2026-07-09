@@ -1,0 +1,4 @@
+# Keep working notes out of `git archive` (the downloadable claude-config.zip).
+BLOG-BRIEF.md export-ignore
+BLOG-NOTES.md export-ignore
+.gitattributes export-ignore
