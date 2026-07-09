@@ -52,9 +52,10 @@ commands/        Slash commands: /whereami /safe-change /resume /improve-loop /l
 agents/          doc-steward, infra-reviewer, editor, thought-partner.
 hooks/           session_start, guardrail (+rules +tests), py_autoformat, statusline, doc_drift,
                  morph-global-{prompt,stop} (opt-in: record every session — see below).
-bin/             morph-mirror (+ its test).
+bin/             morph-mirror (+ its test), otel-spooler (offline OTLP buffer — see docs/OTEL.md).
 skills/          Where your own skills go (see its README).
-docs/            ADOPTING.md — the 10-minute adoption walkthrough.
+docs/            ADOPTING.md — the 10-minute adoption walkthrough; OTEL.md — send Claude Code
+                 metrics to your own local backend (opt-in).
 ```
 
 ## After installing
