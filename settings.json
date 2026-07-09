@@ -34,6 +34,18 @@
         "hooks": [
           { "type": "command", "command": "$HOME/.claude/hooks/doc_drift.sh" }
         ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/morph-global-stop.sh" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/morph-global-prompt.sh" }
+        ]
       }
     ]
   }

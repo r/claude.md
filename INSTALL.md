@@ -50,7 +50,8 @@ rules/           software.md, loops.md, knowledge-work.md, plus two templates yo
 commands/        Slash commands: /whereami /safe-change /resume /improve-loop /ledger /doc-sweep
                  /edit /think.
 agents/          doc-steward, infra-reviewer, editor, thought-partner.
-hooks/           session_start, guardrail (+rules +tests), py_autoformat, statusline, doc_drift.
+hooks/           session_start, guardrail (+rules +tests), py_autoformat, statusline, doc_drift,
+                 morph-global-{prompt,stop} (opt-in: record every session — see below).
 bin/             morph-mirror (+ its test).
 skills/          Where your own skills go (see its README).
 docs/            ADOPTING.md — the 10-minute adoption walkthrough.
@@ -80,6 +81,23 @@ bash ~/.claude/bin/test_morph_mirror.sh
 
 A quick feel for the agency gate: in a scratch repo on `main`, `git push` *asks* (and tells the agent
 to branch off instead of stalling); `git commit` and feature-branch pushes sail through freely.
+
+## Optional: record every session (morph trace capture)
+
+The `morph-global-{prompt,stop}` hooks can archive every Claude Code session — prompts, responses,
+and tool calls — into a single local [morph](https://r.github.io/morph/) store, regardless of which
+directory you're working in. It's **off by default and costs nothing until you opt in**: both hooks
+bail in one line of bash if the store doesn't exist, so an un-opted machine never even starts Python.
+
+To turn it on (needs the `morph` binary):
+
+```bash
+mkdir -p ~/.claude/morph-traces && cd ~/.claude/morph-traces && git init && morph init --git-init .
+```
+
+From then on, browse sessions with `morph session list` / `morph session show --with-trace <hash>`.
+To turn it off, remove `~/.claude/morph-traces` (or the two hooks from `settings.json`). Everything
+stays local — nothing is uploaded.
 
 ## Uninstall / roll back
 
