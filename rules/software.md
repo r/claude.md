@@ -38,8 +38,9 @@
 2. State the intended change in a sentence or two.
 3. Implement the smallest testable slice.
 4. Add or update tests **and docs**; run the quality gate.
-5. Summarize what changed, how to test it, and what's still risky. Commit only when asked and the
-   gate is green — code, tests, and docs together.
+5. Summarize what changed, how to test it, and what's still risky. Commit when the gate is green —
+   code, tests, and docs together, on a branch (branch off first if you're on main). Pushing the
+   feature branch is fine too; anything that lands on main/master waits for an explicit ok.
 
 ## Quality gate (unless the repo defines its own)
 ```bash

@@ -74,8 +74,9 @@ details with yours, or delete it. Keep the shape: a short house style plus a har
 - **A command:** type `/whereami` — read-only, confirms host/git/docker.
 - **The knowledge-work agents:** `/edit` a paragraph of your writing, or `/think` a decision you're
   weighing. (Fill in `voice.md` first for `/edit` to be useful.)
-- **The guardrail:** try `git commit -m test` in a scratch repo — it should *ask* before proceeding,
-  because committing on your behalf is an agency gate.
+- **The guardrail:** in a scratch repo on `main`, try `git push` — it should *ask* (pushing the
+  mainline is the agency gate) and tell the agent to branch off instead. Then `git switch -c test`
+  and note that `git commit` and a branch push sail through: everyday git is deliberately free.
 - **A loop (software only):** `/improve-loop` against a measurable target sets up a checker-first,
   keep-or-rollback loop on a throwaway branch. Read `rules/loops.md` first.
 

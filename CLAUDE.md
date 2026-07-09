@@ -26,7 +26,10 @@ Plus one cross-cutting rule — load it whenever the work is a **loop**:
 ## Never do these without my explicit ok
 *In **auto mode** these still may not happen unattended — but don't block waiting on me. Skip the item,
 record it to the approvals queue, and keep going (see **Auto mode**).*
-- Push, commit on my behalf, deploy, or call a paid / external API.
+- Push to **main/master** (or force-push anywhere), deploy, or call a paid / external API.
+  Everyday git is *not* gated: committing and pushing feature branches is normal work — do it
+  freely. **Main is the edge.** If you're sitting on main and need to commit, branch first
+  (`git switch -c <topic>`) and work there; the mainline push/merge is the step that waits for me.
 - Set up anything that changes behavior later on its own ("flips in a week"). Staged rollouts default
   to **observe / logging only**; the behavior change is a separate, explicit step.
 - Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.

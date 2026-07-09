@@ -98,9 +98,14 @@ wedges the tool.
 matches at *command-segment start* so a dangerous word buried in an argument doesn't trip it. Two
 tiers: **deny** the catastrophic (wipe a disk/root), and **ask** on the destructive-but-legitimate
 (destroy a dataset, prune volumes, force-push) and the *agency* cases you never want done unprompted
-(commit/push to a remote; schedule an unattended `cron`/`at`/systemd job). That second tier promotes
-the CLAUDE.md "never commit/push/flip unattended" rules from advisory prose into a deterministic stop
-that fires even in bypass mode. It's a safety net for accidents and overreach, explicitly *not* a
+(a push that lands on **main/master**; schedule an unattended `cron`/`at`/systemd job). Everyday git
+is deliberately free: commits and feature-branch pushes never ask — they're local/recoverable, and
+the loop doctrine's "keep = commit" depends on them not halting auto mode. The mainline-push rule is
+branch-aware (a `guard` the engine evaluates: explicit refspecs read from the command, bare/`HEAD`
+pushes resolved against the current branch, unknown treated as "could be main"), and its ask message
+carries a `hint` that tells the agent how to keep working — branch off, push the branch, queue the
+mainline push in the approvals file — instead of just stopping. That promotes the CLAUDE.md "main is
+the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a safety net for accidents and overreach, explicitly *not* a
 security boundary.
 
 **The safe-change protocol is the spine of infra work.** Discover current state and say it back; make

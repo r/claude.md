@@ -4,6 +4,11 @@
 #   action: deny | ask
 #   why:    short human explanation
 #   all:    list of regexes that must ALL match for the rule to fire
+#   guard:  (optional) extra engine-evaluated condition; currently only
+#           default-branch-push — fires only when a `git push` lands on
+#           main/master (resolves the current branch for bare/HEAD pushes)
+#   hint:   (optional) replaces the generic ask/deny boilerplate — use it to
+#           tell the agent how to KEEP WORKING (e.g. branch off), not just stop
 #
 # `bash` rules are matched against each command SEGMENT (split on ; & | newline)
 # after leading sudo/env/wrappers are stripped, so a `^` anchors to the start of
@@ -60,16 +65,26 @@ bash:
     why: git push --force can overwrite remote history
     all: ['^git\b.*\bpush\b.*--force(?!-with-lease)']
 
-  # --- ask: agency — Claude must not do these on my behalf without a nod.
-  # These promote the CLAUDE.md "never commit/push/flip unattended without ok"
-  # rules from prose into a deterministic stop (fires even in bypass mode).
-  # Anchored to the git SUBCOMMAND so `git log --grep commit` doesn't trip.
+  # --- ask: agency — only the outward-facing edge, not everyday git.
+  # Commits and feature-branch pushes are FREE: they're local/recoverable
+  # (git reset; re-push a branch) and the loop doctrine's "keep = commit"
+  # depends on them not halting auto mode. What still stops for a nod is
+  # publishing to the MAINLINE: any push that targets main/master — explicit
+  # refspec, HEAD/bare push while on main (the engine resolves the current
+  # branch), --all/--mirror — plus force-pushes (rule above) and the
+  # unattended-scheduling rules below. Anchored to the git SUBCOMMAND so
+  # `git log --grep push` doesn't trip.
   - action: ask
-    why: committing on your behalf (you approve commits explicitly)
-    all: ['^git\s+(?:-C\s+\S+\s+|-c\s+\S+\s+)*commit\b']
-  - action: ask
-    why: pushing publishes your work to a remote
+    why: this push lands on main/master — the mainline is the outward edge (feature-branch pushes don't ask)
     all: ['^git\s+(?:-C\s+\S+\s+|-c\s+\S+\s+)*push\b']
+    guard: default-branch-push
+    hint: >-
+      This push lands on main/master, which needs the user's explicit ok. Don't
+      stall the work: keep going on a feature branch instead — `git switch -c
+      <topic>` (move your commits there if you're sitting on main), push THAT
+      branch (feature-branch pushes are free), and append the staged mainline
+      push/merge to NEEDS-APPROVAL.md per the auto-mode skip-and-log rule.
+      Only push main directly when the user has said yes in this session.
   - action: ask
     why: 'crontab -e/-r or install schedules an unattended job (crontab -l is read-only)'
     all: ['^crontab\b(?!.*\s-l(?:\s|$))']

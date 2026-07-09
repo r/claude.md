@@ -14,37 +14,91 @@ from __future__ import annotations
 import json
 import re
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 RULES_FILE = Path(__file__).with_name("guardrail_rules.yaml")
 WRAPPER = re.compile(r"^(?:\s*(?:\w+=\S+|sudo|nohup|time|env|command|exec)\s+)*")
 SEGMENT = re.compile(r"[;&|\n]+")
+DEFAULT_BRANCHES = {"main", "master"}
 Rule = dict[str, Any]
+BranchFn = Callable[[], str | None]
+
+
+def _unknown_branch() -> str | None:
+    return None
+
+
+def push_targets_default(segment: str, branch_of: BranchFn) -> bool:
+    """True if this `git push` segment lands on main/master.
+
+    Explicit refspecs are read from the command; a bare push (or a HEAD
+    refspec) is resolved via branch_of(). Unknown branch => True — when we
+    can't tell, the push might be the mainline, so we ask. Option values
+    passed as separate tokens can be misparsed as refspecs; that only adds
+    candidates, i.e. errs toward asking, never toward silence.
+    """
+    tokens = segment.split()
+    if "push" not in tokens:
+        return True  # regex matched but shape is odd — err toward asking
+    rest = tokens[tokens.index("push") + 1 :]
+    if any(t in {"--all", "--branches", "--mirror"} for t in rest):
+        return True
+    positional = [t for t in rest if not t.startswith("-")]
+    refspecs = positional[1:]  # first positional is the remote
+    if not refspecs:
+        branch = branch_of()  # bare push: the current branch is the target
+        return branch is None or branch in DEFAULT_BRANCHES
+    for spec in refspecs:
+        dst = spec.rsplit(":", 1)[-1].lstrip("+").removeprefix("refs/heads/")
+        if dst == "HEAD":
+            branch = branch_of()
+            if branch is None or branch in DEFAULT_BRANCHES:
+                return True
+        elif dst in DEFAULT_BRANCHES:
+            return True
+    return False
 
 
 def load_rules() -> dict[str, list[Rule]]:
-    import yaml  # deferred: a missing dep fails open via main()'s except
+    import yaml  # type: ignore[import-untyped]  # deferred: missing dep fails open via main()'s except
 
     rules: dict[str, list[Rule]] = yaml.safe_load(RULES_FILE.read_text())
     return rules
 
 
-def _first_hit(rules: list[Rule], text: str) -> tuple[str, str] | None:
+def _first_hit(
+    rules: list[Rule], text: str, branch_of: BranchFn = _unknown_branch
+) -> tuple[str, str, str | None] | None:
     for rule in rules:
-        if all(re.search(pattern, text) for pattern in rule["all"]):
-            return rule["action"], rule["why"]
+        if not all(re.search(pattern, text) for pattern in rule["all"]):
+            continue
+        if rule.get("guard") == "default-branch-push" and not push_targets_default(
+            text, branch_of
+        ):
+            continue
+        return rule["action"], rule["why"], rule.get("hint")
     return None
 
 
 def classify(
-    tool: str, tool_input: Rule, rules: dict[str, list[Rule]]
-) -> tuple[str, str] | None:
-    """Return (action, why) for the first matching rule, else None. Pure — no I/O."""
+    tool: str,
+    tool_input: Rule,
+    rules: dict[str, list[Rule]],
+    branch_of: BranchFn = _unknown_branch,
+) -> tuple[str, str, str | None] | None:
+    """Return (action, why, hint) for the first matching rule, else None.
+
+    Pure given branch_of — the only I/O is the injected current-branch lookup,
+    which defaults to "unknown" (conservative) so tests stay deterministic.
+    """
     if tool == "Bash":
         command = tool_input.get("command", "") or ""
         for segment in SEGMENT.split(command):
-            hit = _first_hit(rules.get("bash", []), WRAPPER.sub("", segment.strip()))
+            hit = _first_hit(
+                rules.get("bash", []), WRAPPER.sub("", segment.strip()), branch_of
+            )
             if hit:
                 return hit
         return None
@@ -55,12 +109,17 @@ def classify(
     return None
 
 
-def emit(action: str, why: str) -> None:
-    reason = {
-        "deny": f"Guardrail blocked: {why}. Run it manually if truly intended, or edit guardrail_rules.yaml.",
-        "ask": f"Safety check — {why}. Confirm the target and that you have a backup/rollback "
-        "before proceeding.",
-    }[action]
+def emit(action: str, why: str, hint: str | None = None) -> None:
+    # A rule's `hint` replaces the generic boilerplate: it tells the agent how
+    # to keep working (e.g. branch off) instead of just stopping it.
+    reason = (
+        hint
+        or {
+            "deny": f"Guardrail blocked: {why}. Run it manually if truly intended, or edit guardrail_rules.yaml.",
+            "ask": f"Safety check — {why}. Confirm the target and that you have a backup/rollback "
+            "before proceeding.",
+        }[action]
+    )
     print(
         json.dumps(
             {
@@ -74,10 +133,41 @@ def emit(action: str, why: str) -> None:
     )
 
 
+def _git_branch_resolver(cwd: str) -> BranchFn:
+    """Lazy, memoized current-branch lookup for the session's cwd.
+
+    Only ever invoked when a rule's guard needs it (i.e. a bare/HEAD push),
+    so ordinary commands never pay the subprocess. Detached HEAD or any
+    failure => None, which the guard treats as "could be main" (ask).
+    """
+    cache: list[str | None] = []
+
+    def resolve() -> str | None:
+        if not cache:
+            import subprocess
+
+            try:
+                out = subprocess.run(
+                    ["git", "-C", cwd or ".", "symbolic-ref", "--short", "-q", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                cache.append(out.stdout.strip() or None)
+            except Exception:
+                cache.append(None)
+        return cache[0]
+
+    return resolve
+
+
 def main() -> None:
     data = json.load(sys.stdin)
     hit = classify(
-        data.get("tool_name", ""), data.get("tool_input") or {}, load_rules()
+        data.get("tool_name", ""),
+        data.get("tool_input") or {},
+        load_rules(),
+        _git_branch_resolver(data.get("cwd") or "."),
     )
     if hit:
         emit(*hit)
