@@ -9,34 +9,53 @@ This is entirely opt-in. If you don't set the env below, Claude Code exports not
 
 ## 1. Point Claude Code at a collector
 
-Put this in `~/.claude/settings.local.json` (machine-local, gitignored — never mirrored):
+**The telemetry vars must live in the environment Claude Code inherits at launch — not only in
+`settings.json`.** Claude Code's OpenTelemetry SDK reads them from the process environment at startup,
+*before* it applies the `env` block in `settings.json` / `settings.local.json`. Putting them only in
+settings JSON does **not** turn telemetry on: the vars do get set for tool subprocesses (so it *looks*
+configured), but the exporter never starts and no data is sent. Verified on Claude Code 2.1.x with the
+`OTel-OTLP-Exporter-JavaScript` exporter — a settings-only session sends **zero** metrics/logs; the
+same vars exported in the shell export normally. Set them in your **shell**.
 
-```json
-{
-  "env": {
-    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
-    "OTEL_METRICS_EXPORTER": "otlp",
-    "OTEL_LOGS_EXPORTER": "otlp",
-    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
-    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4318",
-    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative"
-  }
-}
+Create `~/.claude/otel.env` from [`otel.env.example`](../otel.env.example) (`chmod 600` — it may hold
+a bearer token):
+
+```bash
+# ~/.claude/otel.env
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+```
+
+Source it from your shell startup file so every `claude` you launch inherits it:
+
+```bash
+echo '[ -f ~/.claude/otel.env ] && . ~/.claude/otel.env' >> ~/.bashrc   # or ~/.zshrc / ~/.profile
+```
+
+Confirm a fresh shell actually has it (should print `1`):
+
+```bash
+exec bash -l && echo "$CLAUDE_CODE_ENABLE_TELEMETRY"
 ```
 
 Any OTLP/HTTP backend works — e.g. the all-in-one [`grafana/otel-lgtm`](https://github.com/grafana/docker-otel-lgtm)
 container (OTel Collector + Prometheus + Loki + Grafana) is the lowest-friction local option.
 
-### Two gotchas that will otherwise silently drop data
+### Three gotchas that will otherwise silently drop data
+- **Settings-JSON `env` does not enable telemetry** — see above. Use the shell environment.
 - **`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative`** — Prometheus's OTLP receiver
   rejects *delta* temporality. Without this, metrics fail to export (logs are unaffected). It's in the
   template above; keep it.
 - **Private-CA backends need `NODE_EXTRA_CA_CERTS`**, not `OTEL_EXPORTER_OTLP_CERTIFICATE` — Claude
   Code's exporter won't trust a private CA via the OTLP var alone. If your endpoint uses a private
-  cert, add `"NODE_EXTRA_CA_CERTS": "/path/to/your-ca.pem"` to the env.
-- **Auth:** Claude Code sends `OTEL_EXPORTER_OTLP_HEADERS` (e.g. `"Authorization=Bearer <token>"`) but
-  does **not** present a client cert (no mTLS from the exporter). Gate a remote endpoint with a bearer
-  token over TLS.
+  cert, add `export NODE_EXTRA_CA_CERTS=/path/to/your-ca.pem` to `otel.env`.
+- **Auth:** Claude Code sends `OTEL_EXPORTER_OTLP_HEADERS` (e.g.
+  `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"`) but does **not** present a client
+  cert (no mTLS from the exporter). Gate a remote endpoint with a bearer token over TLS.
 
 ## 2. Optional: the offline spooler (`bin/otel-spooler.py`)
 
@@ -55,8 +74,8 @@ Claude Code ──OTLP──▶ otel-spooler (localhost:4318) ──replays─�
   oldest dropped). Dead-letters permanently-rejected (4xx) payloads so one bad batch can't wedge it.
 - It never parses OTLP — replays exact bytes — so metrics, logs, and traces all work.
 
-Point Claude at the spooler (`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`, as above — no token
-or CA on the client side; the spooler holds those and talks to your backend).
+Point Claude at the spooler by setting `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` in
+`otel.env` (§1) — no token or CA on the client side; the spooler holds those and talks to your backend.
 
 Run it (env-configured):
 
@@ -97,5 +116,5 @@ verbatim transcript — for that, see the opt-in morph session trace capture in 
 are complementary: OTel = the *what/how-much*, morph = the *what-was-said*.
 
 ## Disable
-Remove the `env` block from `settings.local.json` (and stop the spooler service). Off means off —
-Claude Code exports nothing.
+Remove the `source ~/.claude/otel.env` line from your shell startup file (or delete `otel.env`), open
+a fresh shell, and stop the spooler service. Off means off — Claude Code exports nothing.

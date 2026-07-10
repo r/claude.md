@@ -17,6 +17,7 @@
 !/LICENSE
 !/CLAUDE.md
 !/settings.json
+!/otel.env.example
 !/rules/
 !/commands/
 !/agents/
