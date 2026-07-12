@@ -45,6 +45,20 @@ Each iteration:
    before→after, verdict + commit sha, one-sentence why.
 6. Stop when: budget/max-iterations hit, or **K consecutive rejects** (dry). Never run unbounded.
 
+## Don't rationalize the gate away
+The one failure mode that silently rots a loop is weakening the checker to get a green.
+
+| The excuse | The reality |
+|---|---|
+| "The gate's too strict, relax it just this once." | A green you engineered by loosening the gate measures nothing. A rejected step is a *result* — keep it. |
+| "This test is flaky, skip/delete it." | Then the loop is blind exactly where it's failing. Fix the flake or fix the code. |
+| "The scalar barely moved, count it as a win." | Noise-level wins accumulate into a lie about progress. Strictly-better by a real margin, or roll back. |
+| "I'll write the ledger later." | The ledger is the loop's memory across compaction/resume; unwritten means it didn't happen. |
+
+**Red flags:** the gate command changed mid-loop; a test skipped/deleted to pass; a step kept inside
+the noise margin; more than one change bundled into a single iteration; an unbounded run with no stop
+condition.
+
 ## When it stops
 
 Summarize: net metric baseline→final, how many steps kept vs rolled back, the branch + commits, and

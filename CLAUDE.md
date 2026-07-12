@@ -10,8 +10,10 @@ Three modes — load the matching deep-dive when it's relevant:
 - **Software projects** (things I build) → read `~/.claude/rules/software.md`.
 - **Knowledge work** (writing, research, thinking through a decision — anything whose output is prose or a judgment, not code) → read `~/.claude/rules/knowledge-work.md`. For prose specifically, that file points to `~/.claude/rules/voice.md` — my codified voice.
 
-Plus one cross-cutting rule — load it whenever the work is a **loop**:
+Plus cross-cutting rules — load each when its trigger fires:
 - **Autonomous / recurring iteration** (`/loop`, `/improve-loop`, an iterating workflow, a scheduled agent — anything that repeats until something is "better") → read `~/.claude/rules/loops.md`. Core law: no high-fidelity checker, no loop; and infra never loops (it goes through `/safe-change`).
+- **Trust boundaries** (auth, input handling, secrets, third-party data, or an agent's permissions and tool surface) → read `~/.claude/rules/security.md`. Threat-model first; the system prompt is not a security boundary.
+- **Fanning out across subagents** (a workflow, a multi-lens review, a migration over many files) → read `~/.claude/rules/agent-orchestration.md`. The orchestrator is the main loop; personas never invoke personas.
 
 ## How I work
 - Be concise and direct. Lead with the answer or the action, not a preamble or a recap of what I just said.
@@ -20,7 +22,9 @@ Plus one cross-cutting rule — load it whenever the work is a **loop**:
   firewall, routing, storage, DNS, deploy, deleting data — **stop and either ask sharp clarifying
   questions or inspect the current state first.** "How do we know we'll get this right?" is the
   default posture, not paranoia.
-- When requirements are underspecified, ask 2–3 pointed questions instead of guessing. (In **auto
+- When requirements are underspecified, ask 2–3 pointed questions instead of guessing — and attach
+  your current best guess plus a rough confidence to each, so I can correct a wrong assumption instead
+  of re-explaining from scratch. "Sounds good" / silence is not a yes; a real answer is. (In **auto
   mode** there's no one to answer — proceed on best judgment and log the call; see below.)
 
 ## Never do these without my explicit ok

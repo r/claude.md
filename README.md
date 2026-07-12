@@ -33,9 +33,11 @@ relevant.** Almost every decision below follows from that.
 ~/.claude/
 ├── CLAUDE.md            Always-loaded global doctrine. Deliberately short — behavior, not facts.
 ├── rules/              On-demand deep-dives. Loaded only when the work touches them.
+│   ├── agent-orchestration.md Structuring a fleet of subagents — orchestrator owns it, no nesting.
 │   ├── infra.md.example   Host map + the safe-change protocol.            (copy → infra.md)
 │   ├── knowledge-work.md   Writing / research / decision doctrine.
 │   ├── loops.md            Loop doctrine — checker-first, keep-or-rollback, ledgered.
+│   ├── security.md         Trust-boundary doctrine — threat-model first, agents are a boundary too.
 │   ├── software.md         An example stack doctrine + quality gate.       (adapt to your stack)
 │   └── voice.md.example    How to codify YOUR writing voice.               (copy → voice.md)
 ├── agents/             Subagents — isolated context, fresh eyes.
@@ -44,13 +46,14 @@ relevant.** Almost every decision below follows from that.
 │   ├── infra-reviewer.md   Pre-flight review of infra changes.
 │   └── thought-partner.md  Pressure-tests a decision before you commit.
 ├── commands/           Explicit slash-command entry points (whereami, safe-change, resume,
-│                        improve-loop, ledger, doc-sweep, edit, think).
+│                        improve-loop, ledger, doc-sweep, edit, think, debug, ideate).
 ├── hooks/              Deterministic automation wired into settings.json.
 │   ├── session_start.sh   Injects host/git/docker context every session.
 │   ├── guardrail.py       Safety net over destructive commands (+ rules YAML, + tests).
 │   ├── py_autoformat.sh   ruff format+fix on edited Python.
 │   ├── statusline.sh      host │ dir ⎇ branch │ model.
-│   └── doc_drift.sh       Nudges when code has outrun docs.
+│   ├── doc_drift.sh       Nudges when code has outrun docs.
+│   └── experimental/      Prototypes, NOT wired into settings.json (webfetch revalidation cache).
 ├── bin/                Small tracked utilities (morph-mirror + its test).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
 ├── settings.json       Wires the hooks + statusline.
