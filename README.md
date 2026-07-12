@@ -62,6 +62,28 @@ relevant.** Almost every decision below follows from that.
 
 ---
 
+## Commands — what you can type
+
+Slash commands live in `commands/*.md`; the filename **is** the command, and whatever you type after
+it lands where the file says `$ARGUMENTS` (invoke bare to work off the current conversation). Rules
+and agents are *not* typed — rules auto-load when the work touches them, agents get delegated to.
+
+| Command | Usage | What it does |
+|---|---|---|
+| `/whereami` | `/whereami` | Report current host / git / docker context so you don't act on the wrong machine. |
+| `/resume` | `/resume` | Reconstruct what you were doing and where you left off — no action yet. |
+| `/safe-change` | `/safe-change <what you're changing>` | Walk an infra change through the staged, reversible, observe-first protocol. |
+| `/improve-loop` | `/improve-loop <what to improve>` | Run an autoresearch-style keep-or-rollback loop against a measurable target (software only). |
+| `/ledger` | `/ledger [attempt/decision]` | Append an experiment/decision entry to the project's `LEDGER.md`. |
+| `/debug` | `/debug [the failure]` | Root-cause a failure with a disciplined triage instead of guessing or patching symptoms. |
+| `/ideate` | `/ideate [idea or problem]` | Diverge then converge on a raw idea — variations, honest evaluation, a sharp "Not Doing" list. |
+| `/think` | `/think [decision or argument]` | Pressure-test a decision or argument with the thought-partner subagent. |
+| `/edit` | `/edit [draft or file]` | Hand a draft to the editor subagent for a hard, voice-aware read. |
+| `/doc-sweep` | `/doc-sweep [area]` | Sweep the docs for accuracy + coherence via the doc-steward agent. |
+
+`/debug` and `/ideate` are the newest, adapted from patterns in
+[addyosmani/agent-skills](https://github.com/addyosmani/agent-skills).
+
 ## The mechanisms, and when to reach for each
 
 Claude Code offers several extension points that look interchangeable and are not. The whole setup
