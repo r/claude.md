@@ -147,6 +147,18 @@ else
   ok "config checked out (runtime state and credentials untouched)"
 fi
 
+# Hooks and bin/ scripts are invoked as commands, so they MUST be executable. A
+# repo whose origin machine had core.fileMode=false (an NFS home, say) can record
+# them 100644 — and then every hook silently dies with "permission denied" here.
+# Cheap to reassert; expensive to debug.
+if ! $DRY_RUN; then
+  chmod +x "$CLAUDE_DIR"/hooks/*.sh "$CLAUDE_DIR"/hooks/*.py 2>/dev/null || true
+  chmod +x "$CLAUDE_DIR"/bin/claude-bootstrap "$CLAUDE_DIR"/bin/morph-mirror \
+           "$CLAUDE_DIR"/bin/otel-spooler.py "$CLAUDE_DIR"/bin/test_morph_mirror.sh 2>/dev/null || true
+  [ -f "$CLAUDE_DIR/skills/ask-zora/ask-zora" ] && chmod +x "$CLAUDE_DIR/skills/ask-zora/ask-zora"
+  ok "exec bits asserted on hooks/ and bin/"
+fi
+
 # ── 4. certificates ──────────────────────────────────────────────────────────
 # The CA chain is a PUBLIC cert (verifies the private-CA TLS of the endpoints).
 # The client key is secret and is minted fresh FOR THIS MACHINE ONLY.
