@@ -135,7 +135,7 @@ run mkdir -p "$CLAUDE_DIR"
 if [ -d "$CLAUDE_DIR/.git" ]; then
   ok "already a git repo — fetching"
   run git -C "$CLAUDE_DIR" fetch origin
-  run git -C "$CLAUDE_DIR" reset --hard origin/HEAD 2>/dev/null || run git -C "$CLAUDE_DIR" reset --hard origin/main
+  run git -C "$CLAUDE_DIR" reset --hard origin/main
 else
   backup "$CLAUDE_DIR/settings.json"
   run git -C "$CLAUDE_DIR" init -q
@@ -143,6 +143,18 @@ else
   run git -C "$CLAUDE_DIR" fetch -q origin
   run git -C "$CLAUDE_DIR" reset --hard origin/main
   ok "config checked out (runtime state and credentials untouched)"
+fi
+
+# `init` + `fetch` + `reset --hard` checks the code out but leaves the branch with
+# NO upstream — so a later `git pull` fetches and then refuses with "no tracking
+# information", silently leaving the machine on stale config. That is how a Mac
+# ended up still running a guardrail that had already been fixed upstream. Make
+# the branch track origin/main so `git pull` is the obvious, working update path.
+if ! $DRY_RUN; then
+  git -C "$CLAUDE_DIR" branch -M main 2>/dev/null || true
+  git -C "$CLAUDE_DIR" branch --set-upstream-to=origin/main main >/dev/null 2>&1 \
+    && ok "branch main tracks origin/main (\`git pull\` works from here on)" \
+    || warn "could not set upstream; update with: git -C $CLAUDE_DIR reset --hard origin/main"
 fi
 
 # Hooks and bin/ scripts are invoked as commands, so they MUST be executable. A
