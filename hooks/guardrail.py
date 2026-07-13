@@ -21,13 +21,18 @@ import json
 import re
 import sys
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Optional
 
 WRAPPER = re.compile(r"^(?:\s*(?:\w+=\S+|sudo|nohup|time|env|command|exec)\s+)*")
 SEGMENT = re.compile(r"[;&|\n]+")
 DEFAULT_BRANCHES = {"main", "master"}
 Rule = dict[str, Any]
-BranchFn = Callable[[], str | None]
+# Optional[str], NOT `str | None`. This line is a runtime assignment, not an
+# annotation, so `from __future__ import annotations` does not defer it — and
+# PEP 604 unions need Python 3.10. macOS ships 3.9, where `str | None` raises
+# TypeError at import, the hook crashes, fail-open swallows it, and the guardrail
+# is silently gone. Minimum supported Python here is 3.9; keep it that way.
+BranchFn = Callable[[], Optional[str]]
 
 
 def _unknown_branch() -> str | None:

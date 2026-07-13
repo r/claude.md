@@ -186,7 +186,12 @@ if $WITH_ZORA; then
   else
     if $FORCE_CERT || ! ssh -o BatchMode=yes "$FROM" "test -f '$REMOTE_CERT' && test -f '$REMOTE_KEY'"; then
       say "  minting a new client cert for this machine: CN=$CLIENT_NAME"
-      ssh -o BatchMode=yes "$FROM" "'$CA_GEN' '$CLIENT_NAME'" >/dev/null \
+      # -t is REQUIRED, not cosmetic. Signing may prompt for the CA key's
+      # passphrase; without a TTY on the remote side, openssl cannot disable
+      # terminal echo and the passphrase is printed in CLEARTEXT into the
+      # transcript, scrollback, and any session-capture/telemetry pipeline.
+      # Never redirect this to /dev/null either — you'd hide the prompt itself.
+      ssh -o BatchMode=yes -t "$FROM" "'$CA_GEN' '$CLIENT_NAME'" \
         || die "cert generation failed on $FROM"
       ok "minted $CLIENT_NAME (365 days) — revocable independently of other machines"
     else
@@ -363,8 +368,24 @@ if $WITH_ZORA && [ -n "${ZORA_URL:-}" ]; then
   fi
 fi
 
-python3 "$CLAUDE_DIR/hooks/test_guardrail.py" >/dev/null 2>&1 \
-  && ok "guardrail armed (64 rule cases pass)" \
-  || warn "guardrail tests FAILED — the destructive-command hook may not be protecting you"
+# Exercise the guardrail the way Claude Code actually calls it: feed a real
+# PreToolUse payload to the hook and require it to DENY. Unit tests alone aren't
+# enough — the hook is fail-open, so ANY import error on this machine (a Python
+# version that can't parse the module, a missing file) makes it exit 0 silently
+# and the destructive-command net is simply gone. This check is the only thing
+# standing between "installed" and "installed and actually protecting you".
+GUARD_OUT="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"cwd":"/"}' \
+  | python3 "$CLAUDE_DIR/hooks/guardrail.py" 2>/dev/null || true)"
+if printf '%s' "$GUARD_OUT" | grep -q '"permissionDecision": *"deny"'; then
+  ok "guardrail ARMED — live hook denied 'rm -rf /'"
+  python3 "$CLAUDE_DIR/hooks/test_guardrail.py" >/dev/null 2>&1 \
+    && ok "guardrail rule tests pass" \
+    || warn "guardrail denies, but its rule tests fail — inspect hooks/test_guardrail.py"
+else
+  warn "GUARDRAIL IS NOT PROTECTING YOU. The live hook did not deny 'rm -rf /'."
+  warn "  It is fail-open, so it is currently allowing every destructive command."
+  warn "  Diagnose with:  python3 $CLAUDE_DIR/hooks/guardrail.py <<< '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"rm -rf /\"}}'"
+  warn "  Most likely cause: this machine's python3 ($(python3 -V 2>&1)) cannot import the hook."
+fi
 
 say "done. Open a NEW shell (so otel.env is sourced), then start Claude Code."
