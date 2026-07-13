@@ -1,0 +1,45 @@
+# bootstrap.profile.example — the profile `claude-bootstrap` pulls over SSH.
+#
+# Copy to your HOME HOST (the machine that holds your CA — e.g. a server on your
+# network) as ~/.claude-bootstrap.profile and `chmod 600` it. It holds secrets,
+# so it lives OUTSIDE the ~/.claude git repo and is never committed anywhere.
+#
+# On a new machine:
+#     ./claude-bootstrap --from you@home-host
+#
+# The script SSHes in, reads this, mints a per-machine client cert, and wires
+# everything up. Because every internal name and token lives here rather than in
+# the script, the script itself is safe to publish.
+#
+# Only CLAUDE_REPO and CA_CHAIN are strictly required. Omit the OTEL_* block to
+# skip telemetry; omit the ZORA_* block (or the CA_GEN/CA_*_DIR paths) to skip
+# the mTLS bridge.
+
+# ── config repo ──────────────────────────────────────────────────────────────
+# Your ~/.claude repo. The whitelist .gitignore means only authored config is
+# tracked — credentials, history, sessions and projects stay local.
+CLAUDE_REPO=ssh://git@git.example.internal:2200/you/claude.md.git
+
+# ── certificate authority (on the home host) ─────────────────────────────────
+# CA_CHAIN is your CA's PUBLIC chain — used to verify the private-CA TLS certs
+# your endpoints present. Not a secret.
+CA_CHAIN=/home/you/ca/ca-chain.cert.pem
+
+# Needed only for a per-machine mTLS client cert. CA_GEN takes one argument (the
+# client name) and writes <name>.pem into CA_CERT_DIR and <name>.key.pem into
+# CA_KEY_DIR. Per-machine certs are the point: lose one laptop, revoke one cert.
+CA_GEN=/home/you/ca/generate-client-certificate.sh
+CA_CERT_DIR=/home/you/ca/intermediate/certs
+CA_KEY_DIR=/home/you/ca/intermediate/private
+
+# ── telemetry (optional) ─────────────────────────────────────────────────────
+# Your OTLP ingest endpoint and its bearer token. The new machine never talks to
+# this directly: it exports to a localhost spooler, which holds the token and CA
+# and replays to the backend — so exports survive being off-network.
+OTEL_UPSTREAM=https://otel-ingest.example.internal
+OTEL_TOKEN=replace-with-your-bearer-token
+
+# ── agent bridge (optional) ──────────────────────────────────────────────────
+ZORA_URL=https://agent.example.internal:8643/v1
+ZORA_KEY=replace-with-your-api-key
+ZORA_MODEL=hermes-agent

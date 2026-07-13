@@ -18,6 +18,7 @@
 !/CLAUDE.md
 !/settings.json
 !/otel.env.example
+!/bootstrap.profile.example
 !/rules/
 !/commands/
 !/agents/
@@ -30,6 +31,13 @@
 # *inside* a versioned dir ARE tracked. The pattern ignores below are what
 # actually keep secrets/caches out even there — never rely on the top-level
 # catch-all alone for anything under a versioned dir.
+
+# A filled-in bootstrap profile holds your ingest token, API keys, and CA paths.
+# The real one lives on your home host at ~/.claude-bootstrap.profile, outside
+# this repo. Belt-and-suspenders in case one ever lands here:
+bootstrap.profile
+*.profile
+!*.profile.example
 
 # Credential/secret shapes — never track, even inside a versioned dir.
 *.env

@@ -25,6 +25,40 @@ Install somewhere other than `~/.claude`:
 ./install.sh /path/to/target/.claude
 ```
 
+## Multi-machine install (`bin/claude-bootstrap`)
+
+`install.sh` copies this template onto one machine. **`claude-bootstrap` is for the other case:** you
+already run this config on one box, you keep it in a git repo, and you want a *second* machine — a
+Mac, a laptop — to match it, including the parts that aren't in git.
+
+```bash
+./bin/claude-bootstrap --from you@home-host
+```
+
+Run it on the new machine while it can reach your home host. In one pass it attaches `~/.claude` to
+your config repo, mints a **per-machine mTLS client cert**, installs the offline telemetry spooler as
+a background service (launchd on macOS, systemd user unit on Linux), sources the telemetry env from
+your shell rc, and then verifies all of it.
+
+It reads every machine-specific value — repo URL, endpoints, tokens, CA paths — from a profile on the
+home host (`~/.claude-bootstrap.profile`, `chmod 600`, format in `bootstrap.profile.example`). **The
+script itself contains no hostnames and no secrets**, which is why it can ship here unmodified.
+
+Three properties worth knowing, because they're the reason it exists:
+
+- **Per-machine certs.** Each machine gets its own client cert (`CN=claude-<hostname>`). Lose the
+  laptop and you revoke exactly one cert; every other machine keeps working. Copying one shared key
+  around means a single loss forces you to re-issue everywhere.
+- **It survives being off-network.** Claude Code's OTLP exporter has no disk buffer, so telemetry
+  aimed straight at a backend is *dropped* whenever that backend is unreachable. Bootstrap points
+  Claude at the local spooler instead, which buffers to bounded disk and replays on reconnect — so a
+  laptop that's only sometimes on your network (or VPN) loses nothing.
+- **Idempotent, and it backs up whatever it replaces.** Re-running is safe. `--dry-run` prints the
+  full plan and changes nothing; `--no-otel` / `--no-zora` skip either half.
+
+The secrets never touch an intermediate disk: they're pulled over SSH at install time, written `600`,
+and the profile is `eval`'d in-process rather than copied down.
+
 ## Prerequisites
 
 | Tool | Needed for | If missing |
@@ -52,7 +86,10 @@ commands/        Slash commands: /whereami /safe-change /resume /improve-loop /l
 agents/          doc-steward, infra-reviewer, editor, thought-partner.
 hooks/           session_start, guardrail (+rules +tests), py_autoformat, statusline, doc_drift,
                  morph-global-{prompt,stop} (opt-in: record every session — see below).
-bin/             morph-mirror (+ its test), otel-spooler (offline OTLP buffer — see docs/OTEL.md).
+bin/             claude-bootstrap (set up a second machine — see above), morph-mirror (+ its test),
+                 otel-spooler (offline OTLP buffer — see docs/OTEL.md) + its systemd unit.
+bootstrap.profile.example
+                 Template for the profile claude-bootstrap reads off your home host.
 skills/          Where your own skills go (see its README).
 docs/            ADOPTING.md — the 10-minute adoption walkthrough; OTEL.md — send Claude Code
                  metrics to your own local backend (opt-in).

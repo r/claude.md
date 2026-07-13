@@ -1,0 +1,22 @@
+# systemd USER service for the OTLP spooler (Linux laptops / hosts).
+# Install:
+#   mkdir -p ~/.local/bin ~/.config
+#   cp otel-spooler.py ~/.local/bin/
+#   cp otel-spooler.env.example ~/.config/otel-spooler.env   # then edit it
+#   cp otel-spooler.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now otel-spooler
+#   loginctl enable-linger "$USER"   # so it runs when you're not logged in (optional)
+[Unit]
+Description=OTLP store-and-forward spooler (buffer telemetry offline, replay on reconnect)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/otel-spooler.env
+ExecStart=/usr/bin/env python3 %h/.local/bin/otel-spooler.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

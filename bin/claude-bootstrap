@@ -1,0 +1,360 @@
+#!/usr/bin/env bash
+# claude-bootstrap — set up ~/.claude on a new machine (macOS or Linux).
+#
+# Brings a fresh machine to parity with an existing one WITHOUT needing an NFS
+# mount: it clones your ~/.claude config repo, mints a PER-MACHINE mTLS client
+# cert from your CA, installs the offline OTLP spooler as a background service,
+# and wires the shell env — then verifies the result.
+#
+#   ./claude-bootstrap --from you@home-host
+#
+# Everything machine-specific and secret is pulled over SSH at install time from
+# a profile on the home host, so THIS SCRIPT CONTAINS NO HOSTNAMES OR TOKENS and
+# is safe to publish. See bootstrap.profile.example for the profile format.
+#
+# Design notes:
+#   * Per-machine client cert (CN=claude-<host>): lose the laptop, revoke ONE
+#     cert; every other machine keeps working.
+#   * The spooler means telemetry survives being off-network: exports go to
+#     localhost, buffer to disk (bounded), and replay when you're back.
+#   * Idempotent. Re-running is safe. Anything overwritten is backed up first.
+#   * Secrets are never echoed, never passed as argv, never written world-readable.
+#
+# Bash 3.2 compatible (that's what macOS ships).
+set -euo pipefail
+umask 077
+
+FROM=""
+DRY_RUN=false
+FORCE_CERT=false
+WITH_ZORA=true
+WITH_OTEL=true
+CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
+PROFILE_PATH="${PROFILE_PATH:-.claude-bootstrap.profile}"
+
+usage() {
+  cat <<'USAGE'
+Usage: claude-bootstrap --from USER@HOST [options]
+
+  --from USER@HOST   Home host holding the bootstrap profile + CA. Required.
+  --profile PATH     Profile path on the home host (default: .claude-bootstrap.profile)
+  --no-zora          Skip the Zora mTLS client cert + zora.env
+  --no-otel          Skip the telemetry spooler + otel.env
+  --force-cert       Re-mint this machine's client cert even if one exists
+  --dry-run          Print what would happen; change nothing
+  -h, --help         This
+
+Run it ON the new machine, while it can reach the home host (home network or VPN).
+USAGE
+  exit "${1:-0}"
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --from) FROM="${2:-}"; shift 2 ;;
+    --profile) PROFILE_PATH="${2:-}"; shift 2 ;;
+    --no-zora) WITH_ZORA=false; shift ;;
+    --no-otel) WITH_OTEL=false; shift ;;
+    --force-cert) FORCE_CERT=true; shift ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    -h|--help) usage 0 ;;
+    *) echo "unknown arg: $1" >&2; usage 1 ;;
+  esac
+done
+[ -n "$FROM" ] || { echo "error: --from USER@HOST is required" >&2; usage 1; }
+
+say()  { printf '\033[1m==>\033[0m %s\n' "$*"; }
+warn() { printf '\033[33m  ! %s\033[0m\n' "$*" >&2; }
+ok()   { printf '\033[32m  ✓ %s\033[0m\n' "$*"; }
+die()  { printf '\033[31merror: %s\033[0m\n' "$*" >&2; exit 1; }
+run()  { if $DRY_RUN; then printf '  [dry-run] %s\n' "$*"; else "$@"; fi; }
+
+# Back up a file we're about to replace, timestamped. Never clobber silently.
+backup() {
+  [ -f "$1" ] || return 0
+  local b="$1.bak.$(date +%Y%m%d-%H%M%S)"
+  if $DRY_RUN; then printf '  [dry-run] backup %s -> %s\n' "$1" "$b"; else cp -p "$1" "$b"; warn "backed up existing $(basename "$1") -> $(basename "$b")"; fi
+}
+
+# Write stdin to $1 with mode 600, backing up any existing file.
+write600() {
+  local dest="$1"
+  backup "$dest"
+  if $DRY_RUN; then printf '  [dry-run] write %s (mode 600)\n' "$dest"; cat >/dev/null; return 0; fi
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest"
+  chmod 600 "$dest"
+  ok "wrote $dest"
+}
+
+case "$(uname -s)" in
+  Darwin) OS=mac ;;
+  Linux)  OS=linux ;;
+  *) die "unsupported OS: $(uname -s)" ;;
+esac
+HOST_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null | cut -d. -f1)"
+CLIENT_NAME="claude-$(printf '%s' "$HOST_SHORT" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9-' '-' | sed 's/-*$//')"
+
+say "machine: $HOST_SHORT ($OS) · client cert CN will be: $CLIENT_NAME"
+
+# ── 1. preflight ─────────────────────────────────────────────────────────────
+say "preflight"
+for t in ssh git python3; do
+  command -v "$t" >/dev/null 2>&1 || die "missing required tool: $t"
+done
+ok "ssh, git, python3 present"
+
+if python3 -c 'import yaml' 2>/dev/null; then
+  ok "PyYAML present (guardrail can load its rules)"
+else
+  warn "PyYAML MISSING — the destructive-command guardrail will FAIL OPEN (allow everything)."
+  warn "  fix: python3 -m pip install --user pyyaml"
+fi
+
+ssh -o BatchMode=yes -o ConnectTimeout=8 "$FROM" true 2>/dev/null \
+  || die "cannot ssh to $FROM (need key auth, and you must be on the home network or VPN)"
+ok "ssh to $FROM works"
+
+# ── 2. load the profile from the home host ───────────────────────────────────
+# The profile holds every internal endpoint + secret. It never lands on this
+# machine's disk — we eval it straight into this shell.
+say "loading profile from $FROM:$PROFILE_PATH"
+PROFILE_CONTENT="$(ssh -o BatchMode=yes "$FROM" "cat '$PROFILE_PATH'" 2>/dev/null)" \
+  || die "no profile at $FROM:$PROFILE_PATH — create it from bootstrap.profile.example (chmod 600)"
+# shellcheck disable=SC1090
+eval "$PROFILE_CONTENT"
+: "${CLAUDE_REPO:?profile must set CLAUDE_REPO}"
+: "${CA_CHAIN:?profile must set CA_CHAIN (path on the home host)}"
+ok "profile loaded ($(printf '%s' "$PROFILE_CONTENT" | grep -c '^[A-Z]') settings)"
+
+# ── 3. attach ~/.claude to the config repo ───────────────────────────────────
+# Claude Code has usually already created ~/.claude (credentials, projects,
+# history), so we can't `git clone` into it. Init + fetch + reset instead: the
+# whitelist .gitignore means only authored config is touched; runtime state and
+# credentials are untracked and left exactly where they are.
+say "attaching $CLAUDE_DIR to the config repo"
+run mkdir -p "$CLAUDE_DIR"
+if [ -d "$CLAUDE_DIR/.git" ]; then
+  ok "already a git repo — fetching"
+  run git -C "$CLAUDE_DIR" fetch origin
+  run git -C "$CLAUDE_DIR" reset --hard origin/HEAD 2>/dev/null || run git -C "$CLAUDE_DIR" reset --hard origin/main
+else
+  backup "$CLAUDE_DIR/settings.json"
+  run git -C "$CLAUDE_DIR" init -q
+  run git -C "$CLAUDE_DIR" remote add origin "$CLAUDE_REPO"
+  run git -C "$CLAUDE_DIR" fetch -q origin
+  run git -C "$CLAUDE_DIR" reset --hard origin/main
+  ok "config checked out (runtime state and credentials untouched)"
+fi
+
+# ── 4. certificates ──────────────────────────────────────────────────────────
+# The CA chain is a PUBLIC cert (verifies the private-CA TLS of the endpoints).
+# The client key is secret and is minted fresh FOR THIS MACHINE ONLY.
+say "certificates"
+TLS_DIR="$CLAUDE_DIR/tls"
+run mkdir -p "$TLS_DIR"
+
+if $DRY_RUN; then
+  printf '  [dry-run] fetch CA chain from %s:%s -> %s/ca-chain.pem\n' "$FROM" "$CA_CHAIN" "$TLS_DIR"
+else
+  ssh -o BatchMode=yes "$FROM" "cat '$CA_CHAIN'" > "$TLS_DIR/ca-chain.pem" \
+    || die "could not fetch CA chain"
+  chmod 644 "$TLS_DIR/ca-chain.pem"   # public cert, not a secret
+  ok "CA chain -> $TLS_DIR/ca-chain.pem"
+fi
+
+if $WITH_ZORA; then
+  : "${CA_GEN:?profile must set CA_GEN to enable Zora (path to generate-client-certificate.sh)}"
+  : "${CA_CERT_DIR:?profile must set CA_CERT_DIR}"
+  : "${CA_KEY_DIR:?profile must set CA_KEY_DIR}"
+
+  REMOTE_CERT="$CA_CERT_DIR/$CLIENT_NAME.pem"
+  REMOTE_KEY="$CA_KEY_DIR/$CLIENT_NAME.key.pem"
+
+  if $DRY_RUN; then
+    printf '  [dry-run] mint client cert %s on %s (unless it exists)\n' "$CLIENT_NAME" "$FROM"
+  else
+    if $FORCE_CERT || ! ssh -o BatchMode=yes "$FROM" "test -f '$REMOTE_CERT' && test -f '$REMOTE_KEY'"; then
+      say "  minting a new client cert for this machine: CN=$CLIENT_NAME"
+      ssh -o BatchMode=yes "$FROM" "'$CA_GEN' '$CLIENT_NAME'" >/dev/null \
+        || die "cert generation failed on $FROM"
+      ok "minted $CLIENT_NAME (365 days) — revocable independently of other machines"
+    else
+      ok "reusing existing cert for $CLIENT_NAME (--force-cert to re-mint)"
+    fi
+    ssh -o BatchMode=yes "$FROM" "cat '$REMOTE_CERT'" > "$TLS_DIR/$CLIENT_NAME.pem"
+    ssh -o BatchMode=yes "$FROM" "cat '$REMOTE_KEY'"  > "$TLS_DIR/$CLIENT_NAME.key.pem"
+    chmod 644 "$TLS_DIR/$CLIENT_NAME.pem"
+    chmod 600 "$TLS_DIR/$CLIENT_NAME.key.pem"
+    # Fail loudly rather than writing a config that points at a broken pair.
+    openssl x509 -noout -in "$TLS_DIR/$CLIENT_NAME.pem" 2>/dev/null \
+      || die "fetched client cert is not a valid X.509 cert"
+    ok "client cert + key -> $TLS_DIR/ (key is 600, this machine only)"
+  fi
+fi
+
+# ── 5. telemetry: point Claude at the local spooler, not the backend ─────────
+# Claude Code's OTLP exporter has NO disk buffer: aimed straight at the backend,
+# anything exported while off-network is dropped. Aimed at the spooler, it's
+# buffered to disk and replayed on reconnect. So both the always-on-network Mac
+# and the roaming laptop get the same config — one pattern, not two.
+if $WITH_OTEL; then
+  : "${OTEL_UPSTREAM:?profile must set OTEL_UPSTREAM to enable telemetry}"
+  : "${OTEL_TOKEN:?profile must set OTEL_TOKEN to enable telemetry}"
+  say "telemetry (spooler + env)"
+
+  run mkdir -p "$HOME/.local/bin"
+  run cp "$CLAUDE_DIR/bin/otel-spooler.py" "$HOME/.local/bin/otel-spooler.py"
+  run chmod +x "$HOME/.local/bin/otel-spooler.py"
+
+  # Client side holds NO token and NO CA — the spooler owns those.
+  write600 "$CLAUDE_DIR/otel.env" <<EOF
+# Claude Code telemetry -> local spooler. Sourced from your shell rc.
+# These MUST be in the process env at launch: Claude Code's OTel SDK reads them
+# before it applies settings.json's env block, so a settings-only config sends
+# nothing. No token/CA here — the spooler holds them and talks to the backend.
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp
+export OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
+export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
+EOF
+
+  if [ "$OS" = linux ]; then
+    write600 "$HOME/.config/otel-spooler.env" <<EOF
+SPOOL_UPSTREAM=$OTEL_UPSTREAM
+SPOOL_TOKEN=$OTEL_TOKEN
+SPOOL_CA=$TLS_DIR/ca-chain.pem
+SPOOL_LISTEN_HOST=127.0.0.1
+SPOOL_LISTEN_PORT=4318
+SPOOL_DIR=$CLAUDE_DIR/otel-spool
+SPOOL_MAX_BYTES=200000000
+SPOOL_FLUSH_INTERVAL=10
+SPOOL_TIMEOUT=10
+EOF
+    run mkdir -p "$HOME/.config/systemd/user"
+    run cp "$CLAUDE_DIR/bin/otel-spooler.service" "$HOME/.config/systemd/user/otel-spooler.service"
+    if $DRY_RUN; then
+      printf '  [dry-run] systemctl --user enable --now otel-spooler\n'
+    elif command -v systemctl >/dev/null 2>&1; then
+      systemctl --user daemon-reload
+      systemctl --user enable --now otel-spooler
+      ok "systemd user service otel-spooler enabled + started"
+    else
+      warn "systemctl unavailable — start the spooler yourself:"
+      warn "  python3 ~/.local/bin/otel-spooler.py &"
+    fi
+  else
+    # launchd can't read an EnvironmentFile, so config is inline in the plist.
+    # That makes the plist secret-bearing: 600, and never committed.
+    PLIST="$HOME/Library/LaunchAgents/com.claude-config.otel-spooler.plist"
+    write600 "$PLIST" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.claude-config.otel-spooler</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>$HOME/.local/bin/otel-spooler.py</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SPOOL_UPSTREAM</key><string>$OTEL_UPSTREAM</string>
+    <key>SPOOL_TOKEN</key><string>$OTEL_TOKEN</string>
+    <key>SPOOL_CA</key><string>$TLS_DIR/ca-chain.pem</string>
+    <key>SPOOL_LISTEN_HOST</key><string>127.0.0.1</string>
+    <key>SPOOL_LISTEN_PORT</key><string>4318</string>
+    <key>SPOOL_DIR</key><string>$CLAUDE_DIR/otel-spool</string>
+    <key>SPOOL_MAX_BYTES</key><string>200000000</string>
+    <key>SPOOL_FLUSH_INTERVAL</key><string>10</string>
+    <key>SPOOL_TIMEOUT</key><string>10</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>/tmp/otel-spooler.log</string>
+</dict>
+</plist>
+EOF
+    if ! $DRY_RUN; then
+      launchctl unload "$PLIST" 2>/dev/null || true
+      launchctl load "$PLIST" && ok "launchd agent com.claude-config.otel-spooler loaded"
+    fi
+  fi
+fi
+
+# ── 6. Zora ──────────────────────────────────────────────────────────────────
+if $WITH_ZORA && [ -n "${ZORA_URL:-}" ]; then
+  : "${ZORA_KEY:?profile must set ZORA_KEY to enable Zora}"
+  say "zora"
+  write600 "$CLAUDE_DIR/zora.env" <<EOF
+# A2A bridge to Zora. Gitignored — never commit.
+# Client cert is THIS MACHINE'S ($CLIENT_NAME) — revoke it alone if lost.
+ZORA_URL=$ZORA_URL
+ZORA_KEY=$ZORA_KEY
+ZORA_MODEL=${ZORA_MODEL:-hermes-agent}
+ZORA_CACERT=$TLS_DIR/ca-chain.pem
+ZORA_CLIENT_CERT=$TLS_DIR/$CLIENT_NAME.pem
+ZORA_CLIENT_KEY=$TLS_DIR/$CLIENT_NAME.key.pem
+EOF
+fi
+
+# ── 7. shell wiring ──────────────────────────────────────────────────────────
+# The telemetry vars have to be in the env BEFORE Claude Code starts, so they go
+# in the rc file, not settings.json. macOS defaults to zsh.
+if $WITH_OTEL; then
+  say "shell wiring"
+  RC="$HOME/.bashrc"; [ "$OS" = mac ] && RC="$HOME/.zshrc"
+  LINE="[ -f \"\$HOME/.claude/otel.env\" ] && . \"\$HOME/.claude/otel.env\""
+  if [ -f "$RC" ] && grep -qF 'claude/otel.env' "$RC"; then
+    ok "$RC already sources otel.env"
+  elif $DRY_RUN; then
+    printf '  [dry-run] append otel.env source line to %s\n' "$RC"
+  else
+    printf '\n# Claude Code telemetry (via local spooler)\n%s\n' "$LINE" >> "$RC"
+    ok "appended otel.env source line to $RC"
+  fi
+fi
+
+# ── 8. verify ────────────────────────────────────────────────────────────────
+# "How do we know we got it right" — prove the path, don't assume it.
+say "verify"
+$DRY_RUN && { echo "  [dry-run] skipping verification"; exit 0; }
+
+if $WITH_OTEL; then
+  sleep 2
+  CODE="$(curl -s -o /dev/null -w '%{http_code}' -m 5 -X POST \
+      -H 'Content-Type: application/json' -d '{"resourceMetrics":[]}' \
+      http://127.0.0.1:4318/v1/metrics 2>/dev/null || echo 000)"
+  if [ "$CODE" = "200" ]; then
+    ok "spooler accepting on localhost:4318 (HTTP 200) — telemetry buffers offline"
+  else
+    warn "spooler did not answer on localhost:4318 (got '$CODE')."
+    warn "  Claude is UNAFFECTED (the export just fails fast), but nothing is recorded."
+    warn "  logs: /tmp/otel-spooler.log"
+  fi
+  # Is the backend reachable right now? Purely informational: unreachable is the
+  # normal, handled case — that's the whole point of the spooler.
+  if curl -s -o /dev/null -m 5 --cacert "$TLS_DIR/ca-chain.pem" "$OTEL_UPSTREAM" 2>/dev/null; then
+    ok "backend reachable — spool will drain now"
+  else
+    ok "backend not reachable right now (off-network?) — exports will buffer and replay on reconnect"
+  fi
+fi
+
+if $WITH_ZORA && [ -n "${ZORA_URL:-}" ]; then
+  if [ -x "$CLAUDE_DIR/skills/ask-zora/ask-zora" ]; then
+    if "$CLAUDE_DIR/skills/ask-zora/ask-zora" "reply with exactly: bootstrap ok" >/dev/null 2>&1; then
+      ok "zora mTLS bridge answered — client cert accepted"
+    else
+      warn "zora did not answer (off-network, or the CA/cert path is wrong)"
+    fi
+  fi
+fi
+
+python3 "$CLAUDE_DIR/hooks/test_guardrail.py" >/dev/null 2>&1 \
+  && ok "guardrail tests pass" \
+  || warn "guardrail tests failed or PyYAML missing — the safety hook may fail open"
+
+say "done. Open a NEW shell (so otel.env is sourced), then start Claude Code."
