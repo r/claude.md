@@ -49,12 +49,13 @@ relevant.** Almost every decision below follows from that.
 │                        improve-loop, ledger, doc-sweep, edit, think, debug, ideate).
 ├── hooks/              Deterministic automation wired into settings.json.
 │   ├── session_start.sh   Injects host/git/docker context every session.
-│   ├── guardrail.py       Safety net over destructive commands (+ rules YAML, + tests).
+│   ├── guardrail.py       Safety net over destructive commands (+ guardrail_rules.py, + tests).
 │   ├── py_autoformat.sh   ruff format+fix on edited Python.
 │   ├── statusline.sh      host │ dir ⎇ branch │ model.
 │   ├── doc_drift.sh       Nudges when code has outrun docs.
 │   └── experimental/      Prototypes, NOT wired into settings.json (webfetch revalidation cache).
-├── bin/                Small tracked utilities (morph-mirror + its test).
+├── bin/                Small tracked utilities: claude-bootstrap (set up a second machine),
+│                        morph-mirror (+ its test), otel-spooler (offline OTLP buffer).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
 ├── settings.json       Wires the hooks + statusline.
 └── .gitignore          Whitelist model — tracks config, excludes all secrets/history/transcripts.
@@ -118,9 +119,16 @@ delete the rest.
 machine. Every hook exits 0 except a *deliberate* block. A guardrail bug allows the action; it never
 wedges the tool.
 
-**The guardrail is data, not code.** Destructive-command patterns live in `guardrail_rules.yaml`
-(`action` + `why` + regexes); `guardrail.py` is a ~90-line engine. Tuning it means editing YAML. It
-matches at *command-segment start* so a dangerous word buried in an argument doesn't trip it. Two
+**The guardrail is data, not code — and it depends on nothing.** Destructive-command patterns live in
+`guardrail_rules.py` (`action` + `why` + regexes); `guardrail.py` is a ~190-line engine. The rules are
+a plain Python dict literal — data the interpreter itself parses — so tuning the guardrail means
+editing a list of regexes, not logic, and it needs no parser and no package. That second half is
+load-bearing: the rules used to be YAML, and *fail-open plus a third-party import* is a trap. On a
+machine without PyYAML the guardrail couldn't load its rules and silently allowed every destructive
+command. A control you can disarm by **not** installing something is not a control. (Raw strings
+rather than JSON, too: the rules are regex-heavy, and backslash-doubling in a safety file is an error
+hazard.) It matches at *command-segment start* so a dangerous word buried in an argument doesn't
+trip it. Two
 tiers: **deny** the catastrophic (wipe a disk/root), and **ask** on the destructive-but-legitimate
 (destroy a dataset, prune volumes, force-push) and the *agency* cases you never want done unprompted
 (a push that lands on **main/master**; schedule an unattended `cron`/`at`/systemd job). Everyday git
@@ -130,8 +138,14 @@ branch-aware (a `guard` the engine evaluates: explicit refspecs read from the co
 pushes resolved against the current branch, unknown treated as "could be main"), and its ask message
 carries a `hint` that tells the agent how to keep working — branch off, push the branch, queue the
 mainline push in the approvals file — instead of just stopping. That promotes the CLAUDE.md "main is
-the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a safety net for accidents and overreach, explicitly *not* a
-security boundary.
+the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a
+safety net for accidents and overreach, explicitly *not* a security boundary.
+
+**Nothing to install.** Every executable piece here — all the hooks, `bin/otel-spooler.py` — runs on
+the Python 3 and shell your machine already has. Zero third-party packages, so there's no pip step, no
+venv, and nothing to install globally: unzip it and it works. That began as convenience and became a
+rule once the guardrail showed the other edge of it — a dependency you have to remember to install is
+a dependency that will be missing somewhere, and the failure is silent.
 
 **The safe-change protocol is the spine of infra work.** Discover current state and say it back; make
 the *most minimal* change; default to reversible + observe-only (log first, flip behavior as a

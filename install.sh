@@ -49,13 +49,7 @@ echo "Preflight checks:"
 have() { command -v "$1" >/dev/null 2>&1; }
 
 if have python3; then
-  echo "  ✓ python3"
-  if python3 -c 'import yaml' 2>/dev/null; then
-    echo "  ✓ PyYAML (guardrail hook can load its rules)"
-  else
-    echo "  ✗ PyYAML MISSING — the guardrail hook fails OPEN without it (allows everything)."
-    echo "      install with:  python3 -m pip install pyyaml    (or: brew install libyaml && pip3 install pyyaml)"
-  fi
+  echo "  ✓ python3 (all hooks are stdlib-only — nothing to pip install)"
 else
   echo "  ✗ python3 MISSING — session_start, statusline, doc_drift and the guardrail need it."
   echo "      macOS:  install the Xcode Command Line Tools ('xcode-select --install') or 'brew install python'"

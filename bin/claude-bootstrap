@@ -104,12 +104,10 @@ for t in ssh git python3; do
 done
 ok "ssh, git, python3 present"
 
-if python3 -c 'import yaml' 2>/dev/null; then
-  ok "PyYAML present (guardrail can load its rules)"
-else
-  warn "PyYAML MISSING — the destructive-command guardrail will FAIL OPEN (allow everything)."
-  warn "  fix: python3 -m pip install --user pyyaml"
-fi
+# Nothing here needs a third-party package: every hook, the spooler, and the
+# agent bridge are stdlib-only, on purpose. So there is no pip step, no venv, and
+# no global install — and no way to disarm the guardrail by forgetting one.
+ok "no third-party packages required (everything is stdlib)"
 
 ssh -o BatchMode=yes -o ConnectTimeout=8 "$FROM" true 2>/dev/null \
   || die "cannot ssh to $FROM (need key auth, and you must be on the home network or VPN)"
@@ -366,7 +364,7 @@ if $WITH_ZORA && [ -n "${ZORA_URL:-}" ]; then
 fi
 
 python3 "$CLAUDE_DIR/hooks/test_guardrail.py" >/dev/null 2>&1 \
-  && ok "guardrail tests pass" \
-  || warn "guardrail tests failed or PyYAML missing — the safety hook may fail open"
+  && ok "guardrail armed (64 rule cases pass)" \
+  || warn "guardrail tests FAILED — the destructive-command hook may not be protecting you"
 
 say "done. Open a NEW shell (so otel.env is sourced), then start Claude Code."

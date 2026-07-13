@@ -63,16 +63,20 @@ and the profile is `eval`'d in-process rather than copied down.
 
 | Tool | Needed for | If missing |
 |------|-----------|------------|
-| **python3** | session banner, status line, doc-drift nudge, guardrail | those hooks no-op; install via Xcode CLT (`xcode-select --install`) or `brew install python` |
-| **PyYAML** | the guardrail reads its rules from YAML | **guardrail fails OPEN (allows everything)** — `python3 -m pip install pyyaml` |
+| **python3** | session banner, status line, doc-drift nudge, guardrail | those hooks no-op — including the guardrail, which then **fails open**; install via Xcode CLT (`xcode-select --install`) or `brew install python` |
 | **git** | the loop / commit / continuity workflow | core workflow features degrade |
 | ruff *or* uv | Python auto-format on save | that hook no-ops (optional) |
 | docker | container count in the session banner | banner omits it (optional) |
 | `timeout` | bounding hook subprocesses | hooks run unbounded — harmless; macOS gets it via `brew install coreutils` (as `gtimeout`, which the hooks detect) |
 | morph | the opt-in VCS mirror | `bin/morph-mirror` no-ops cleanly (optional) |
 
-The only prerequisite that changes *safety* rather than *convenience* is **PyYAML** — without it the
-destructive-command guardrail can't load its rules and fails open. Install it.
+**No third-party Python packages.** Every hook, plus `bin/otel-spooler.py`, is stdlib-only on purpose:
+there is no pip step, no venv, and nothing to install globally. The guardrail is the reason it's a rule
+and not just a nicety — its rules used to be YAML, so on a machine without PyYAML it couldn't load them
+and, being fail-open, silently allowed every destructive command. A safety control you can disarm by
+*not* installing something is not a control, so the rules are now a plain Python dict literal
+(`hooks/guardrail_rules.py`). The prerequisite that still changes *safety* rather than convenience is
+therefore **python3** itself: without it the guardrail doesn't run at all.
 
 ## What's here
 

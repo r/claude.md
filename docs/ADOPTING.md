@@ -35,11 +35,12 @@ path. Then start a new Claude Code session and confirm:
 - the **status line** shows `host │ dir ⎇ branch │ model`, and
 - a **session-start banner** names your host, directory, and git/docker state.
 
-The `guardrail.py` hook needs Python 3 with `pyyaml`. It **fails open** — if the dep is missing it
-just allows actions rather than blocking you — but you want it working, so:
+The `guardrail.py` hook needs Python 3 and nothing else — it's stdlib-only, so there's nothing to pip
+install. It **fails open** by design (a bug in it must never block every tool call), which is exactly
+why it carries no dependency: a control that quietly switches itself off on a machine that's missing a
+package is not a control. Confirm it's live:
 
 ```bash
-python3 -c "import yaml" || pip install pyyaml
 python3 ~/.claude/hooks/test_guardrail.py    # should print: ok — N guardrail cases passed
 ```
 

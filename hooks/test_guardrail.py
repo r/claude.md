@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Tests for the PreToolUse guardrail. Run directly (`python3 test_guardrail.py`)
-or under pytest. Guards against regressions in guardrail_rules.yaml + the engine."""
+or under pytest. Guards against regressions in guardrail_rules.py + the engine."""
 
 from __future__ import annotations
 
@@ -61,8 +61,8 @@ CASES: list[tuple[str, dict[str, object], str | None]] = [
     ("Bash", {"command": "systemd-run --on-active=30m /usr/bin/foo"}, "ask"),
     # allow — safe / scoped
     ("Bash", {"command": "rm -rf ./build"}, None),
-    ("Bash", {"command": "rm -rf /mnt/data/project/old"}, None),
-    ("Bash", {"command": "docker rm -f my-container"}, None),
+    ("Bash", {"command": "rm -rf /mnt/docker-volumes/x/old"}, None),
+    ("Bash", {"command": "docker rm -f zora-tls"}, None),
     ("Bash", {"command": "chmod -R 777 ./tmp"}, None),  # 777 not on /
     ("Bash", {"command": "docker system prune"}, None),  # prune without -a is fine
     # allow — everyday git is free: commits and feature-branch pushes

@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
-"""PreToolUse guardrail — a small, data-driven safety net over destructive and
-"agency" commands.
+"""PreToolUse guardrail — a small, data-driven safety net over the ~/.claude
+safe-change rules.
 
-The specifics live in guardrail_rules.yaml (action + why + regexes). This file
+The specifics live in guardrail_rules.py (action + why + regexes). This file
 is just the engine: for a Bash command it checks each command segment (leading
 sudo/env stripped, so prose mentions don't trip it); for Write/Edit it scans the
 content for secrets. FAIL-OPEN by design — any error allows the action, because
 a bug here must never block every tool call across every session and host.
+
+STDLIB ONLY — deliberately. Fail-open plus a third-party import is a trap: the
+rules used to be YAML, so any machine without PyYAML installed had a guardrail
+that silently allowed everything. A security control you can disarm by NOT
+installing something is not a control. The rules are now a Python dict literal,
+which every Python can read.
 """
 
 from __future__ import annotations
@@ -15,10 +21,8 @@ import json
 import re
 import sys
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-RULES_FILE = Path(__file__).with_name("guardrail_rules.yaml")
 WRAPPER = re.compile(r"^(?:\s*(?:\w+=\S+|sudo|nohup|time|env|command|exec)\s+)*")
 SEGMENT = re.compile(r"[;&|\n]+")
 DEFAULT_BRANCHES = {"main", "master"}
@@ -62,10 +66,11 @@ def push_targets_default(segment: str, branch_of: BranchFn) -> bool:
 
 
 def load_rules() -> dict[str, list[Rule]]:
-    import yaml  # type: ignore[import-untyped]  # deferred: missing dep fails open via main()'s except
+    # Sibling module, stdlib import — no parser, no dependency, nothing to install.
+    # This import cannot fail for a reason the user can't see, which is the point.
+    from guardrail_rules import RULES
 
-    rules: dict[str, list[Rule]] = yaml.safe_load(RULES_FILE.read_text())
-    return rules
+    return RULES
 
 
 def _first_hit(
@@ -115,9 +120,9 @@ def emit(action: str, why: str, hint: str | None = None) -> None:
     reason = (
         hint
         or {
-            "deny": f"Guardrail blocked: {why}. Run it manually if truly intended, or edit guardrail_rules.yaml.",
-            "ask": f"Safety check — {why}. Confirm the target and that you have a backup/rollback "
-            "before proceeding.",
+            "deny": f"Guardrail blocked: {why}. Run it manually if truly intended, or edit guardrail_rules.py.",
+            "ask": f"Safety check — {why}. Confirm the target host and that you have a backup/rollback "
+            "(safe-change protocol, ~/.claude/rules/homelab.md) before proceeding.",
         }[action]
     )
     print(
