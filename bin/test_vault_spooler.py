@@ -115,6 +115,46 @@ def test_enqueue_format() -> None:
         check("empty body refused", empty.returncode == 2)
 
 
+def test_correlation_key() -> None:
+    """`key` must be stable across edits — it is what tells the normalizer WHICH
+    canonical note to update. The content hash cannot do this job: it changes
+    with the text, so a hash-keyed normalizer files every revision as a new note."""
+    print("correlation key:")
+    with tempfile.TemporaryDirectory() as tmp:
+        q = Path(tmp)
+
+        enqueue(q, "Tally status", "half migrated", kind="project-state", project="tally")
+        first = pending(q)[0].read_text()
+        enqueue(q, "Tally status", "fully migrated now", kind="project-state", project="tally")
+        second = [f for f in pending(q) if f.read_text() != first][0].read_text()
+
+        def field(text: str, name: str) -> str:
+            for line in text.splitlines():
+                if line.startswith(name + ":"):
+                    return line.split(":", 1)[1].strip().strip('"')
+            return ""
+
+        check("key survives an edit", field(first, "key") == field(second, "key") == "project:tally")
+        check("id does NOT (it tracks the text)", field(first, "id") != field(second, "id"))
+        check("status is always unprocessed", field(second, "status") == "unprocessed")
+
+        env = {"VAULT_QUEUE_DIR": str(q)}
+        proc = subprocess.run(
+            [sys.executable, str(WRITE), "--type", "runbook", "--title", "Bounce DNS",
+             "--host", "host-b", "--key", "runbook:dns-bounce", "--quiet"],
+            input="restart on both resolvers", text=True, capture_output=True,
+            env={**os.environ, **env}, timeout=30,
+        )
+        check("explicit --key accepted", proc.returncode == 0, proc.stderr)
+        explicit = [f for f in pending(q) if "Bounce DNS" in f.read_text()][0].read_text()
+        check("explicit key wins over derivation",
+              field(explicit, "key") == "runbook:dns-bounce")
+
+        enqueue(q, "Host fact", "ram upgraded", kind="note", project="")
+        hostonly = [f for f in pending(q) if "ram upgraded" in f.read_text()][0].read_text()
+        check("falls back to host: when no project", field(hostonly, "key") == "host:host-a")
+
+
 def test_content_hash_dedups() -> None:
     print("idempotency:")
     with tempfile.TemporaryDirectory() as tmp:
@@ -263,7 +303,7 @@ def test_status_reports_problems() -> None:
 
 
 if __name__ == "__main__":
-    for fn in (test_enqueue_format, test_content_hash_dedups, test_delivery_and_sent,
+    for fn in (test_enqueue_format, test_correlation_key, test_content_hash_dedups, test_delivery_and_sent,
                test_replay_is_idempotent, test_offline_keeps_everything,
                test_4xx_quarantine_5xx_retry, test_cap_refuses_never_evicts,
                test_status_reports_problems):

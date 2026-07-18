@@ -72,6 +72,10 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--project", default="")
     ap.add_argument("--host", default=socket.gethostname())
     ap.add_argument("--confidence", default="high", choices=CONFIDENCE)
+    ap.add_argument("--key", default="", help=(
+        "stable correlation key naming WHICH canonical note this belongs to, e.g. "
+        "'host:web-1', 'project:tally', 'runbook:vault-snapshot'. Survives edits, "
+        "unlike the content hash. Derived from --project/--host when omitted."))
     ap.add_argument("--source", default="", help="where this came from; defaults to cwd + session")
     ap.add_argument("--tags", default="", help="comma-separated")
     ap.add_argument("--body", default=None, help="body text; default reads stdin")
@@ -92,11 +96,24 @@ def main(argv: List[str]) -> int:
     now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
     tags = [t.strip() for t in args.tags.split(",") if t.strip()]
 
-    # The hash covers the semantic content, NOT the timestamp — so the same fact
-    # enqueued twice collapses to one inbox file rather than two near-duplicates.
     digest = hashlib.sha256(
         "\x00".join([args.kind, args.title, args.project, args.host, body]).encode("utf-8")
     ).hexdigest()[:12]
+
+    # The content hash identifies THIS TEXT; `key` identifies WHICH CANONICAL NOTE
+    # the text belongs to. They are different jobs and conflating them is a bug:
+    # edit a note and its hash changes, so a hash-keyed normalizer files the
+    # revision as a brand-new note instead of updating the existing one. That
+    # matters most for project-state and runbook, the types that get revised.
+    # So: hash for inbox dedupe, key for correlation.
+    key = args.key
+    if not key:
+        if args.project:
+            key = "project:{}".format(args.project)
+        elif args.host:
+            key = "host:{}".format(args.host)
+        else:
+            key = "{}:{}".format(args.kind, args.title.lower().replace(" ", "-")[:40])
 
     front = [
         "---",
@@ -108,6 +125,10 @@ def main(argv: List[str]) -> int:
         "source: {}".format(yaml_escape(source)),
         "created: {}".format(now),
         "id: {}".format(digest),
+        "key: {}".format(yaml_escape(key)),
+        # INVARIANT: this is always `unprocessed`. Only the vault agent advances
+        # it. A note arriving with any other status is a spooler bug and should be
+        # quarantined by the normalizer, never trusted.
         "status: unprocessed",
     ]
     if tags:
