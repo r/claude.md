@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""vault-write — enqueue one knowledge entry for the IT/project vault.
+
+Writes a single Obsidian-style note into the local queue (~/.claude/vault-queue).
+That is ALL it does, and that is the point: capture is a plain file write with no
+daemon, no network, and no localhost port involved, so it succeeds identically on
+a server and on a laptop in an airport with no wifi. bin/vault-spooler.py drains the
+queue to the vault's inbox whenever the vault is reachable; the vault agent normalizes from there
+into the typed folders. She stays the only writer of canonical vault files.
+
+The queued file IS the note — plain markdown with YAML frontmatter — so the queue
+stays readable with `cat` while you are offline and waiting for it to drain.
+
+Idempotency, stated precisely: the filename is `{timestamp_ns}-{content_hash}.md`.
+Because the timestamp is in there, enqueuing the same fact twice DOES produce two
+queue files and two inbox objects — this does not deduplicate at the semantic
+level, and the normalizer should dedup on the `id:` frontmatter field when normalizing.
+What the hash does buy is crash safety: re-delivering a GIVEN queue file always
+PUTs to the same name, so the spooler's at-least-once delivery overwrites rather
+than duplicating. That is the property the spooler depends on.
+
+Usage:
+  vault-write --type change --title "Moved vault to host-b ZFS" \\
+              --project host-b-docker --confidence high  < body.md
+  echo "..." | vault-write --type decision --title "Queue, not two-way merge"
+
+STDLIB ONLY, and safe to call from a hook: it never blocks and never raises.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import socket
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import List
+
+QUEUE = Path(os.environ.get("VAULT_QUEUE_DIR") or (Path.home() / ".claude" / "vault-queue"))
+
+TYPES = ["change", "decision", "runbook", "project-state", "note"]
+CONFIDENCE = ["high", "medium", "low"]
+
+# Refuse to enqueue past this; the spooler enforces the same cap. Unlike the OTel
+# spooler we NEVER drop the oldest to make room — losing a metric is fine, losing
+# a decision record is not. Over cap is a loud failure, not a silent eviction.
+MAX_QUEUE_BYTES = int(os.environ.get("VAULT_QUEUE_MAX_BYTES", str(50_000_000)))
+
+
+def queue_bytes() -> int:
+    total = 0
+    for f in QUEUE.glob("*.md"):
+        try:
+            total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def yaml_escape(value: str) -> str:
+    """Quote scalars so a colon or a leading @ can't corrupt the frontmatter."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def main(argv: List[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--type", dest="kind", required=True, choices=TYPES)
+    ap.add_argument("--title", required=True)
+    ap.add_argument("--project", default="")
+    ap.add_argument("--host", default=socket.gethostname())
+    ap.add_argument("--confidence", default="high", choices=CONFIDENCE)
+    ap.add_argument("--source", default="", help="where this came from; defaults to cwd + session")
+    ap.add_argument("--tags", default="", help="comma-separated")
+    ap.add_argument("--body", default=None, help="body text; default reads stdin")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    body = args.body if args.body is not None else sys.stdin.read()
+    body = body.strip()
+    if not body:
+        sys.stderr.write("vault-write: refusing to enqueue an entry with an empty body\n")
+        return 2
+
+    source = args.source or "{}:{}".format(args.host, os.getcwd())
+    session = os.environ.get("CLAUDE_SESSION_ID", "")
+    if session:
+        source += " (session {})".format(session[:8])
+
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+
+    # The hash covers the semantic content, NOT the timestamp — so the same fact
+    # enqueued twice collapses to one inbox file rather than two near-duplicates.
+    digest = hashlib.sha256(
+        "\x00".join([args.kind, args.title, args.project, args.host, body]).encode("utf-8")
+    ).hexdigest()[:12]
+
+    front = [
+        "---",
+        "type: {}".format(args.kind),
+        "title: {}".format(yaml_escape(args.title)),
+        "host: {}".format(yaml_escape(args.host)),
+        "project: {}".format(yaml_escape(args.project)),
+        "confidence: {}".format(args.confidence),
+        "source: {}".format(yaml_escape(source)),
+        "created: {}".format(now),
+        "id: {}".format(digest),
+        "status: unprocessed",
+    ]
+    if tags:
+        front.append("tags: [{}]".format(", ".join(tags)))
+    front.append("---")
+
+    note = "\n".join(front) + "\n\n# {}\n\n{}\n".format(args.title, body)
+    encoded = note.encode("utf-8")
+
+    try:
+        QUEUE.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write("vault-write: cannot create queue dir: {}\n".format(exc))
+        return 1
+
+    if queue_bytes() + len(encoded) > MAX_QUEUE_BYTES:
+        # Loud, and leave a marker the session banner will surface.
+        sys.stderr.write(
+            "vault-write: queue is over its {} byte cap — NOT enqueuing, and nothing "
+            "was dropped. The spooler is probably not draining; check "
+            "`vault-spooler.py --status`.\n".format(MAX_QUEUE_BYTES)
+        )
+        try:
+            (QUEUE / "OVER_CAP").write_text(now + "\n")
+        except OSError:
+            pass
+        return 1
+
+    name = "{:020d}-{}.md".format(time.time_ns(), digest)
+    tmp = QUEUE / (name + ".tmp")
+    try:
+        with tmp.open("wb") as fh:
+            fh.write(encoded)
+        os.replace(str(tmp), str(QUEUE / name))  # atomic; drainer only sees *.md
+    except OSError as exc:
+        sys.stderr.write("vault-write: enqueue failed: {}\n".format(exc))
+        return 1
+
+    try:
+        (QUEUE / "OVER_CAP").unlink()
+    except OSError:
+        pass
+
+    if not args.quiet:
+        print("queued {} ({})".format(name, args.kind))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as exc:  # never take down a caller
+        sys.stderr.write("vault-write: {}\n".format(exc))
+        sys.exit(1)
