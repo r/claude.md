@@ -48,3 +48,22 @@ The shape itself:
 The generic lesson: **queue locally, deliver when reachable, and keep exactly one writer of the
 canonical files so you never need a merge algorithm.** A skill's bundled script is a natural place for
 the enqueue side, precisely because it can't fail in a way that costs you the thought.
+
+Three things this shape teaches once you actually run it, all of which cost more to learn later:
+
+- **An identifier that changes with the content can't correlate anything.** A content hash tells you
+  *this is the same text*; it cannot tell you *this is a newer version of that note*, because editing
+  the text changes the hash. If entries are ever revised, carry a second, stable key naming what the
+  entry is *about* — and let the hash do nothing but deduplicate redeliveries. Conflating the two
+  means every revision files itself as a brand-new record.
+- **Don't let one entry be both an event and a state.** "What happened" is immutable and correct
+  forever; "what's currently true" needs revising. Put them in one entry and the live fact gets
+  frozen inside an append-only record that nobody will ever update. Split them, and let a shared key
+  tie the pair together.
+- **Check whether your server can actually scope a credential before you consolidate.** It's
+  tempting to serve reads and writes from one process. Many file servers — `rclone serve webdav`
+  among them — authenticate many users but give all of them the same view, with read-only set
+  process-wide. Where that's true, the *only* thing separating a writer from your canonical files is
+  what you mounted into its process. Verify against the server's own docs rather than assuming a
+  per-user permission model exists, and prove the boundary with a negative test: attempt the
+  traversal, then check the filesystem rather than trusting the status code.
