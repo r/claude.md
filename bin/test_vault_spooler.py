@@ -66,13 +66,14 @@ def start_server() -> "tuple[HTTPServer, int]":
 
 
 def enqueue(queue: Path, title: str, body: str, kind: str = "change",
-            project: str = "claude", extra_env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
+            project: str = "claude", extra_env: Optional[Dict[str, str]] = None,
+            domain: str = "infra") -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env["VAULT_QUEUE_DIR"] = str(queue)
     if extra_env:
         env.update(extra_env)
     return subprocess.run(
-        [sys.executable, str(WRITE), "--type", kind, "--title", title,
+        [sys.executable, str(WRITE), "--type", kind, "--domain", domain, "--title", title,
          "--project", project, "--host", "host-a", "--quiet"],
         input=body, text=True, capture_output=True, env=env, timeout=30,
     )
@@ -104,7 +105,7 @@ def test_enqueue_format() -> None:
         check("one note queued", len(files) == 1)
         text = files[0].read_text()
         check("has frontmatter", text.startswith("---\n"))
-        for field in ("type: change", "host:", "project:", "confidence: high",
+        for field in ("type: change", "domain: infra", "host:", "project:", "confidence: high",
                       "source:", "created:", "id:", "status: unprocessed"):
             check("frontmatter has {}".format(field.rstrip(":")), field in text)
         check("body present", "The dataset moved last week." in text)
@@ -140,7 +141,7 @@ def test_correlation_key() -> None:
 
         env = {"VAULT_QUEUE_DIR": str(q)}
         proc = subprocess.run(
-            [sys.executable, str(WRITE), "--type", "runbook", "--title", "Bounce DNS",
+            [sys.executable, str(WRITE), "--type", "runbook", "--domain", "infra", "--title", "Bounce DNS",
              "--host", "host-b", "--key", "runbook:dns-bounce", "--quiet"],
             input="restart on both resolvers", text=True, capture_output=True,
             env={**os.environ, **env}, timeout=30,
@@ -153,6 +154,35 @@ def test_correlation_key() -> None:
         enqueue(q, "Host fact", "ram upgraded", kind="note", project="")
         hostonly = [f for f in pending(q) if "ram upgraded" in f.read_text()][0].read_text()
         check("falls back to host: when no project", field(hostonly, "key") == "host:host-a")
+
+
+def test_domain_is_required_and_explicit() -> None:
+    """The two halves of the vault are different kinds of knowledge, and every
+    heuristic for guessing which one misfiles something. So it must be stated."""
+    print("domain:")
+    with tempfile.TemporaryDirectory() as tmp:
+        q = Path(tmp)
+        proc = subprocess.run(
+            [sys.executable, str(WRITE), "--type", "note", "--title", "no domain", "--quiet"],
+            input="body", text=True, capture_output=True,
+            env={**os.environ, "VAULT_QUEUE_DIR": str(q)}, timeout=30,
+        )
+        check("omitting --domain is rejected", proc.returncode != 0)
+        check("error names the flag", "--domain" in proc.stderr, proc.stderr[:120])
+
+        bad = subprocess.run(
+            [sys.executable, str(WRITE), "--type", "note", "--domain", "misc",
+             "--title", "bad domain", "--quiet"],
+            input="body", text=True, capture_output=True,
+            env={**os.environ, "VAULT_QUEUE_DIR": str(q)}, timeout=30,
+        )
+        check("unknown domain is rejected", bad.returncode != 0)
+
+        enqueue(q, "Infra thing", "body", domain="infra")
+        enqueue(q, "Software thing", "body", domain="software")
+        texts = [f.read_text() for f in pending(q)]
+        check("infra domain emitted", any("domain: infra" in t for t in texts))
+        check("software domain emitted", any("domain: software" in t for t in texts))
 
 
 def test_content_hash_dedups() -> None:
@@ -303,7 +333,7 @@ def test_status_reports_problems() -> None:
 
 
 if __name__ == "__main__":
-    for fn in (test_enqueue_format, test_correlation_key, test_content_hash_dedups, test_delivery_and_sent,
+    for fn in (test_enqueue_format, test_domain_is_required_and_explicit, test_correlation_key, test_content_hash_dedups, test_delivery_and_sent,
                test_replay_is_idempotent, test_offline_keeps_everything,
                test_4xx_quarantine_5xx_retry, test_cap_refuses_never_evicts,
                test_status_reports_problems):

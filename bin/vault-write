@@ -41,8 +41,28 @@ from typing import List
 
 QUEUE = Path(os.environ.get("VAULT_QUEUE_DIR") or (Path.home() / ".claude" / "vault-queue"))
 
-TYPES = ["change", "decision", "runbook", "project-state", "note"]
+# The shape of the note, which decides whether it is an immutable record or a
+# living document. Infra needs REFERENCE and PLAN as much as it needs an event
+# log — a port map or an HA plan is not a "change", and forcing it into one
+# freezes a fact that is meant to be revised.
+TYPES = [
+    "change",         # immutable: something was done, past tense
+    "decision",       # immutable: a choice + alternatives rejected
+    "runbook",        # living:    how to do a procedure
+    "plan",           # living:    future intent, not yet done (HA, migrations)
+    "reference",      # living:    inventory/topology — a host, a service, a port map
+    "pattern",        # living:    a technique or trick learned while building
+    "tool",           # living:    a tool used, how, and the verdict
+    "project-state",  # living:    where a project stands
+    "note",           # living:    catch-all
+]
 CONFIDENCE = ["high", "medium", "low"]
+# Which half of the vault this belongs to. Required and never guessed: the two
+# halves are different kinds of knowledge, and the obvious heuristics all misfile.
+# "key starts with project:" looks like a software signal until you notice that
+# infra is itself managed in repos — an infra config repo is a project: key describing
+# pure infra. A wrong default files things silently; a required flag does not.
+DOMAINS = ["infra", "software"]
 
 # Refuse to enqueue past this; the spooler enforces the same cap. Unlike the OTel
 # spooler we NEVER drop the oldest to make room — losing a metric is fine, losing
@@ -68,6 +88,9 @@ def yaml_escape(value: str) -> str:
 def main(argv: List[str]) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--type", dest="kind", required=True, choices=TYPES)
+    ap.add_argument("--domain", required=True, choices=DOMAINS, help=(
+        "infra = something done to the machines/network; software = knowledge "
+        "from building things. Required on purpose — see DOMAINS above."))
     ap.add_argument("--title", required=True)
     ap.add_argument("--project", default="")
     ap.add_argument("--host", default=socket.gethostname())
@@ -118,6 +141,7 @@ def main(argv: List[str]) -> int:
     front = [
         "---",
         "type: {}".format(args.kind),
+        "domain: {}".format(args.domain),
         "title: {}".format(yaml_escape(args.title)),
         "host: {}".format(yaml_escape(args.host)),
         "project: {}".format(yaml_escape(args.project)),
