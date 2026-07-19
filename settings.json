@@ -27,9 +27,20 @@
         "hooks": [
           { "type": "command", "command": "$HOME/.claude/hooks/py_autoformat.sh" }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/checkpoint.py" }
+        ]
       }
     ],
     "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/checkpoint.py" }
+        ]
+      },
       {
         "hooks": [
           { "type": "command", "command": "$HOME/.claude/hooks/doc_drift.sh" }
@@ -45,6 +56,11 @@
       {
         "hooks": [
           { "type": "command", "command": "$HOME/.claude/hooks/morph-global-prompt.sh" }
+        ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/checkpoint.py" }
         ]
       }
     ]

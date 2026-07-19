@@ -1,0 +1,35 @@
+# systemd USER service for the vault spooler — drains ~/.claude/vault-queue to
+# the vault's inbox whenever it is reachable.
+#
+# Note this is a DRAINER, not a capture path: bin/vault-write puts notes on disk
+# by itself, so nothing is lost while this service is stopped, failed, or not yet
+# installed. It only moves already-durable files, and delivery is idempotent on the
+# note's content hash, so a restart can never double-write.
+#
+# Install:
+#   mkdir -p ~/.local/bin ~/.config/systemd/user
+#   cp vault-spooler.py ~/.local/bin/
+#   cp vault-spooler.env.example ~/.config/vault-spooler.env   # then edit it (chmod 600)
+#   cp vault-spooler.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now vault-spooler
+#   loginctl enable-linger "$USER"   # so it drains when you're not logged in
+#
+# Health:  python3 ~/.local/bin/vault-spooler.py --status
+[Unit]
+Description=Vault knowledge spooler (queue notes offline, deliver on reconnect)
+After=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/vault-spooler.env
+ExecStart=/usr/bin/env python3 %h/.local/bin/vault-spooler.py
+# on-failure, NOT always (otel-spooler.service uses always, deliberately different):
+# this drainer exits 0 when VAULT_UPSTREAM is unset, and Restart=always would turn
+# that clean exit into a restart loop every 5 seconds forever. on-failure leaves an
+# unconfigured spooler stopped and still restarts a genuine crash.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""Recover morph traces for sessions that died before their Stop hook ran.
+
+morph-global-prompt.sh appends every prompt to
+  <store>/.morph/hooks/pending-<session-id>.jsonl
+and morph-global-stop.sh assembles that into a trace and DELETES the pending
+file. So a pending file that outlives its session is a session whose trace was
+never assembled — a killed session, a crashed terminal, a lost SSH pipe.
+
+Nothing is actually lost when that happens: the raw transcript is still on disk
+at ~/.claude/projects/<slug>/<session-id>.jsonl. It was only ever the assembly
+step that got skipped. This script reconstructs the Stop payload and pipes it
+into morph-global-stop.sh, which does the assembly exactly as it always would.
+We reuse that hook verbatim rather than reimplementing it — one assembler, one
+set of bugs.
+
+SAFETY — the reason for --min-age-hours:
+  Assembling a session that is still ALIVE would consume its pending file, and
+  its real Stop hook would then find nothing and produce no trace. We would have
+  traded a complete trace for a partial one. So a pending file is only
+  considered orphaned once it has been untouched for a good while (default 6h),
+  and we additionally require the transcript to be equally cold. Waiting is free;
+  a wrongly-truncated trace is not.
+
+Run manually, or let session_start.sh fire it detached in the background.
+Idempotent and safe to run repeatedly. STDLIB ONLY.
+"""
+
+from __future__ import annotations
+
+import argparse
+import errno
+import json
+import os
+import subprocess
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional
+
+STORE = Path(os.environ.get("MORPH_TRACES_STORE") or (Path.home() / ".claude" / "morph-traces"))
+PROJECTS = Path.home() / ".claude" / "projects"
+STOP_HOOK = Path.home() / ".claude" / "hooks" / "morph-global-stop.sh"
+LOCK_STALE_SECS = 900
+
+
+def log(msg: str) -> None:
+    line = "{} {}".format(datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"), msg)
+    try:
+        d = STORE / ".morph" / "hooks" / "logs"
+        d.mkdir(parents=True, exist_ok=True)
+        with (d / "global-record.log").open("a") as fh:
+            fh.write("recover: " + line + "\n")
+    except Exception:
+        pass
+
+
+def acquire_lock(path: Path) -> Optional[int]:
+    """Never let two recoveries race over the same pending files."""
+    try:
+        if path.exists() and (time.time() - path.stat().st_mtime) > LOCK_STALE_SECS:
+            path.unlink()  # previous run died holding it
+    except Exception:
+        pass
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.write(fd, str(os.getpid()).encode())
+        return fd
+    except OSError as exc:
+        if exc.errno == errno.EEXIST:
+            return None
+        raise
+
+
+def find_transcript(session_id: str) -> str:
+    try:
+        for candidate in PROJECTS.glob("*/{}.jsonl".format(session_id)):
+            return str(candidate)
+    except Exception:
+        pass
+    return ""
+
+
+def read_pending(path: Path) -> List[Dict[str, object]]:
+    rows: List[Dict[str, object]] = []
+    try:
+        with path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(row, dict):
+                    rows.append(row)
+    except Exception:
+        pass
+    return rows
+
+
+def is_cold(path: Path, min_age: float) -> bool:
+    try:
+        return (time.time() - path.stat().st_mtime) >= min_age
+    except Exception:
+        return False
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--min-age-hours", type=float, default=6.0,
+                    help="only recover pending files untouched this long (default: 6)")
+    ap.add_argument("--max", type=int, default=5,
+                    help="max sessions to recover per run (default: 5)")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--verbose", action="store_true")
+    args = ap.parse_args()
+
+    hooks_dir = STORE / ".morph" / "hooks"
+    if not (STORE / ".morph").is_dir() or not STOP_HOOK.exists():
+        return 0  # not opted in to trace capture
+
+    def say(msg: str) -> None:
+        if args.verbose or args.dry_run:
+            print(msg)
+
+    lock = None
+    if not args.dry_run:
+        lock = acquire_lock(hooks_dir / ".recover.lock")
+        if lock is None:
+            say("another recovery is running; nothing to do")
+            return 0
+
+    min_age = args.min_age_hours * 3600
+    recovered = skipped = failed = 0
+    try:
+        pendings = sorted(hooks_dir.glob("pending-*.jsonl"))
+        for pending in pendings:
+            if recovered >= args.max:
+                say("hit --max {}; leaving the rest for the next run".format(args.max))
+                break
+
+            session_id = pending.name[len("pending-"):-len(".jsonl")]
+
+            if not is_cold(pending, min_age):
+                skipped += 1
+                say("SKIP {} — still warm (< {}h), may be a live session".format(session_id[:8], args.min_age_hours))
+                continue
+
+            transcript = find_transcript(session_id)
+            if transcript and not is_cold(Path(transcript), min_age):
+                skipped += 1
+                say("SKIP {} — transcript still being written".format(session_id[:8]))
+                continue
+
+            rows = read_pending(pending)
+            if not rows:
+                skipped += 1
+                say("SKIP {} — empty pending file".format(session_id[:8]))
+                continue
+
+            cwd = ""
+            model = ""
+            for row in reversed(rows):
+                if not cwd and row.get("cwd"):
+                    cwd = str(row["cwd"])
+                if not model and row.get("model"):
+                    model = str(row["model"])
+            payload = {
+                "session_id": session_id,
+                "hook_event_name": "Stop",
+                "cwd": cwd or ".",
+                "model": model or "",
+                "transcript_path": transcript,
+                "last_assistant_message": "[recovered: session ended without a clean Stop]",
+            }
+
+            say("RECOVER {} cwd={} transcript={}".format(
+                session_id[:8], cwd or "?", "yes" if transcript else "no (prompts only)"))
+            if args.dry_run:
+                recovered += 1
+                continue
+
+            try:
+                proc = subprocess.run(
+                    ["bash", str(STOP_HOOK)],
+                    input=json.dumps(payload), text=True,
+                    capture_output=True, timeout=120,
+                )
+            except Exception as exc:
+                failed += 1
+                log("ERR {} {}".format(session_id, exc))
+                continue
+
+            # The hook deletes the pending file only on a successful import.
+            if pending.exists():
+                failed += 1
+                log("ERR {} assembler left pending in place: {}".format(
+                    session_id, (proc.stderr or "").strip()[:200]))
+            else:
+                recovered += 1
+                log("OK recovered session_id={} cwd={}".format(session_id, cwd))
+    finally:
+        if lock is not None:
+            try:
+                os.close(lock)
+                (hooks_dir / ".recover.lock").unlink()
+            except Exception:
+                pass
+
+    if args.verbose or args.dry_run:
+        print("recovered={} skipped={} failed={}".format(recovered, skipped, failed))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:  # never make noise in a session
+        log("ERR fatal {}".format(exc))
+        sys.exit(0)

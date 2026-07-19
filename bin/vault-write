@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+"""vault-write — enqueue one knowledge entry for the IT/project vault.
+
+Writes a single Obsidian-style note into the local queue (~/.claude/vault-queue).
+That is ALL it does, and that is the point: capture is a plain file write with no
+daemon, no network, and no localhost port involved, so it succeeds identically on
+a server and on a laptop in an airport with no wifi. bin/vault-spooler.py drains the
+queue to the vault's inbox whenever the vault is reachable; the vault agent normalizes from there
+into the typed folders. She stays the only writer of canonical vault files.
+
+The queued file IS the note — plain markdown with YAML frontmatter — so the queue
+stays readable with `cat` while you are offline and waiting for it to drain.
+
+Idempotency, stated precisely: the filename is `{timestamp_ns}-{content_hash}.md`.
+Because the timestamp is in there, enqueuing the same fact twice DOES produce two
+queue files and two inbox objects — this does not deduplicate at the semantic
+level, and the normalizer should dedup on the `id:` frontmatter field when normalizing.
+What the hash does buy is crash safety: re-delivering a GIVEN queue file always
+PUTs to the same name, so the spooler's at-least-once delivery overwrites rather
+than duplicating. That is the property the spooler depends on.
+
+Usage:
+  vault-write --type change --title "Moved vault to host-b ZFS" \\
+              --project host-b-docker --confidence high  < body.md
+  echo "..." | vault-write --type decision --title "Queue, not two-way merge"
+
+STDLIB ONLY, and safe to call from a hook: it never blocks and never raises.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import socket
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import List
+
+QUEUE = Path(os.environ.get("VAULT_QUEUE_DIR") or (Path.home() / ".claude" / "vault-queue"))
+
+# The shape of the note, which decides whether it is an immutable record or a
+# living document. Infra needs REFERENCE and PLAN as much as it needs an event
+# log — a port map or an HA plan is not a "change", and forcing it into one
+# freezes a fact that is meant to be revised.
+TYPES = [
+    "change",         # immutable: something was done, past tense
+    "decision",       # immutable: a choice + alternatives rejected
+    "runbook",        # living:    how to do a procedure
+    "plan",           # living:    future intent, not yet done (HA, migrations)
+    "reference",      # living:    inventory/topology — a host, a service, a port map
+    "pattern",        # living:    a technique or trick learned while building
+    "tool",           # living:    a tool used, how, and the verdict
+    "project-state",  # living:    where a project stands
+    "note",           # living:    catch-all
+]
+CONFIDENCE = ["high", "medium", "low"]
+# Which half of the vault this belongs to. Required and never guessed: the two
+# halves are different kinds of knowledge, and the obvious heuristics all misfile.
+# "key starts with project:" looks like a software signal until you notice that
+# infra is itself managed in repos — an infra config repo is a project: key describing
+# pure infra. A wrong default files things silently; a required flag does not.
+DOMAINS = ["infra", "software"]
+
+# Refuse to enqueue past this; the spooler enforces the same cap. Unlike the OTel
+# spooler we NEVER drop the oldest to make room — losing a metric is fine, losing
+# a decision record is not. Over cap is a loud failure, not a silent eviction.
+MAX_QUEUE_BYTES = int(os.environ.get("VAULT_QUEUE_MAX_BYTES", str(50_000_000)))
+
+
+def queue_bytes() -> int:
+    total = 0
+    for f in QUEUE.glob("*.md"):
+        try:
+            total += f.stat().st_size
+        except OSError:
+            pass
+    return total
+
+
+def yaml_escape(value: str) -> str:
+    """Quote scalars so a colon or a leading @ can't corrupt the frontmatter."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def main(argv: List[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--type", dest="kind", required=True, choices=TYPES)
+    ap.add_argument("--domain", required=True, choices=DOMAINS, help=(
+        "infra = something done to the machines/network; software = knowledge "
+        "from building things. Required on purpose — see DOMAINS above."))
+    ap.add_argument("--title", required=True)
+    ap.add_argument("--project", default="")
+    ap.add_argument("--host", default=socket.gethostname())
+    ap.add_argument("--confidence", default="high", choices=CONFIDENCE)
+    ap.add_argument("--key", default="", help=(
+        "stable correlation key naming WHICH canonical note this belongs to, e.g. "
+        "'host:web-1', 'project:tally', 'runbook:vault-snapshot'. Survives edits, "
+        "unlike the content hash. Derived from --project/--host when omitted."))
+    ap.add_argument("--source", default="", help="where this came from; defaults to cwd + session")
+    ap.add_argument("--tags", default="", help="comma-separated")
+    ap.add_argument("--body", default=None, help="body text; default reads stdin")
+    ap.add_argument("--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    body = args.body if args.body is not None else sys.stdin.read()
+    body = body.strip()
+    if not body:
+        sys.stderr.write("vault-write: refusing to enqueue an entry with an empty body\n")
+        return 2
+
+    source = args.source or "{}:{}".format(args.host, os.getcwd())
+    session = os.environ.get("CLAUDE_SESSION_ID", "")
+    if session:
+        source += " (session {})".format(session[:8])
+
+    now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+
+    digest = hashlib.sha256(
+        "\x00".join([args.kind, args.title, args.project, args.host, body]).encode("utf-8")
+    ).hexdigest()[:12]
+
+    # The content hash identifies THIS TEXT; `key` identifies WHICH CANONICAL NOTE
+    # the text belongs to. They are different jobs and conflating them is a bug:
+    # edit a note and its hash changes, so a hash-keyed normalizer files the
+    # revision as a brand-new note instead of updating the existing one. That
+    # matters most for project-state and runbook, the types that get revised.
+    # So: hash for inbox dedupe, key for correlation.
+    key = args.key
+    if not key:
+        if args.project:
+            key = "project:{}".format(args.project)
+        elif args.host:
+            key = "host:{}".format(args.host)
+        else:
+            key = "{}:{}".format(args.kind, args.title.lower().replace(" ", "-")[:40])
+
+    front = [
+        "---",
+        "type: {}".format(args.kind),
+        "domain: {}".format(args.domain),
+        "title: {}".format(yaml_escape(args.title)),
+        "host: {}".format(yaml_escape(args.host)),
+        "project: {}".format(yaml_escape(args.project)),
+        "confidence: {}".format(args.confidence),
+        "source: {}".format(yaml_escape(source)),
+        "created: {}".format(now),
+        "id: {}".format(digest),
+        "key: {}".format(yaml_escape(key)),
+        # INVARIANT: this is always `unprocessed`. Only the vault agent advances
+        # it. A note arriving with any other status is a spooler bug and should be
+        # quarantined by the normalizer, never trusted.
+        "status: unprocessed",
+    ]
+    if tags:
+        front.append("tags: [{}]".format(", ".join(tags)))
+    front.append("---")
+
+    note = "\n".join(front) + "\n\n# {}\n\n{}\n".format(args.title, body)
+    encoded = note.encode("utf-8")
+
+    try:
+        QUEUE.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write("vault-write: cannot create queue dir: {}\n".format(exc))
+        return 1
+
+    if queue_bytes() + len(encoded) > MAX_QUEUE_BYTES:
+        # Loud, and leave a marker the session banner will surface.
+        sys.stderr.write(
+            "vault-write: queue is over its {} byte cap — NOT enqueuing, and nothing "
+            "was dropped. The spooler is probably not draining; check "
+            "`vault-spooler.py --status`.\n".format(MAX_QUEUE_BYTES)
+        )
+        try:
+            (QUEUE / "OVER_CAP").write_text(now + "\n")
+        except OSError:
+            pass
+        return 1
+
+    name = "{:020d}-{}.md".format(time.time_ns(), digest)
+    tmp = QUEUE / (name + ".tmp")
+    try:
+        with tmp.open("wb") as fh:
+            fh.write(encoded)
+        os.replace(str(tmp), str(QUEUE / name))  # atomic; drainer only sees *.md
+    except OSError as exc:
+        sys.stderr.write("vault-write: enqueue failed: {}\n".format(exc))
+        return 1
+
+    try:
+        (QUEUE / "OVER_CAP").unlink()
+    except OSError:
+        pass
+
+    if not args.quiet:
+        print("queued {} ({})".format(name, args.kind))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)
+    except Exception as exc:  # never take down a caller
+        sys.stderr.write("vault-write: {}\n".format(exc))
+        sys.exit(1)

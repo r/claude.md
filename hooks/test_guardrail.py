@@ -4,6 +4,9 @@ or under pytest. Guards against regressions in guardrail_rules.py + the engine."
 
 from __future__ import annotations
 
+import pathlib
+import sys
+
 import guardrail
 
 RULES = guardrail.load_rules()
@@ -62,7 +65,7 @@ CASES: list[tuple[str, dict[str, object], str | None]] = [
     # allow — safe / scoped
     ("Bash", {"command": "rm -rf ./build"}, None),
     ("Bash", {"command": "rm -rf /mnt/docker-volumes/x/old"}, None),
-    ("Bash", {"command": "docker rm -f zora-tls"}, None),
+    ("Bash", {"command": "docker rm -f my-app-tls"}, None),
     ("Bash", {"command": "chmod -R 777 ./tmp"}, None),  # 777 not on /
     ("Bash", {"command": "docker system prune"}, None),  # prune without -a is fine
     # allow — everyday git is free: commits and feature-branch pushes
@@ -143,10 +146,63 @@ def test_mainline_push_hint_survives_to_emit_reason() -> None:
     assert "feature branch" in hit[2] and "NEEDS-APPROVAL" in hit[2]
 
 
+def test_end_to_end_under_system_python() -> None:
+    """Run the hook the way the HARNESS runs it: as a subprocess, over stdin.
+
+    The tests above `import guardrail`, so they exercise the rules but say
+    nothing about whether the file loads under the interpreter that `#!/usr/bin/env
+    python3` actually resolves to on this machine. That gap has now bitten four
+    times — `str | None` (3.10), `dict[str, Any]` (3.9), `collections.abc.Callable[…]`
+    (3.9), `str.removeprefix` (3.9) — and each time the failure was invisible:
+    the hook died at import, PreToolUse read the non-zero exit as a non-blocking
+    error, and every destructive command was allowed. The oldest box in the fleet
+    runs Ubuntu 20.04 / Python 3.8.10, so the runtime floor is 3.8, not 3.9.
+
+    A guardrail that silently allows everything is worse than no guardrail,
+    because you think you have one. Assert the observable output.
+    """
+    import json as _json
+    import subprocess as _sp
+
+    hook = pathlib.Path(__file__).resolve().parent / "guardrail.py"
+
+    def decide(command: str) -> str | None:
+        proc = _sp.run(
+            [str(hook)],
+            input=_json.dumps({
+                "tool_name": "Bash",
+                "tool_input": {"command": command},
+                "cwd": "/tmp",
+            }),
+            text=True, capture_output=True, timeout=30,
+        )
+        assert proc.returncode == 0, (
+            f"hook exited {proc.returncode} for {command!r} — it probably failed to "
+            f"load under {sys.version.split()[0]}. stderr:\n{proc.stderr}"
+        )
+        if not proc.stdout.strip():
+            return None  # no opinion == allow
+        payload = _json.loads(proc.stdout)
+        section = payload.get("hookSpecificOutput", payload)
+        decision: str | None = section.get("permissionDecision")
+        return decision
+
+    assert decide("rm -rf /") == "deny", "catastrophic command was not denied"
+    assert decide("mkfs.ext4 /dev/sda1") == "deny"
+    assert decide("git push --force origin main") == "ask"
+    assert decide("ls -la") is None, "ordinary command should pass silently"
+    # The refspec path specifically — this is where removeprefix() used to blow up.
+    assert decide("git push origin refs/heads/main") == "ask"
+
+
 if __name__ == "__main__":
     for _tool, _input, _expected in CASES:
         check_case(_tool, _input, _expected)
     for _cmd, _branch, _exp in BRANCH_CASES:
         check_branch_case(_cmd, _branch, _exp)
     test_mainline_push_hint_survives_to_emit_reason()
-    print(f"ok — {len(CASES) + len(BRANCH_CASES) + 1} guardrail cases passed")
+    test_end_to_end_under_system_python()
+    print(
+        f"ok — {len(CASES) + len(BRANCH_CASES) + 2} guardrail cases passed "
+        f"(python {sys.version.split()[0]})"
+    )

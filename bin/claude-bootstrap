@@ -163,8 +163,11 @@ fi
 # Cheap to reassert; expensive to debug.
 if ! $DRY_RUN; then
   chmod +x "$CLAUDE_DIR"/hooks/*.sh "$CLAUDE_DIR"/hooks/*.py 2>/dev/null || true
-  chmod +x "$CLAUDE_DIR"/bin/claude-bootstrap "$CLAUDE_DIR"/bin/morph-mirror \
-           "$CLAUDE_DIR"/bin/otel-spooler.py "$CLAUDE_DIR"/bin/test_morph_mirror.sh 2>/dev/null || true
+  # Glob bin/ rather than naming each script: the explicit list silently missed
+  # bin/morph-recover-orphans when it was added. Everything in bin/ is a script
+  # except the systemd unit, which must stay non-executable.
+  find "$CLAUDE_DIR/bin" -maxdepth 1 -type f ! -name '*.service' \
+       -exec chmod +x {} + 2>/dev/null || true
   [ -f "$CLAUDE_DIR/skills/ask-zora/ask-zora" ] && chmod +x "$CLAUDE_DIR/skills/ask-zora/ask-zora"
   ok "exec bits asserted on hooks/ and bin/"
 fi

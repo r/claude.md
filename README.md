@@ -48,16 +48,23 @@ relevant.** Almost every decision below follows from that.
 ├── commands/           Explicit slash-command entry points (whereami, safe-change, resume,
 │                        improve-loop, ledger, doc-sweep, edit, think, debug, ideate).
 ├── hooks/              Deterministic automation wired into settings.json.
-│   ├── session_start.sh   Injects host/git/docker context every session.
+│   ├── session_start.sh   Injects host/git/docker context, an interrupted-session warning, queue health.
 │   ├── guardrail.py       Safety net over destructive commands (+ guardrail_rules.py, + tests).
+│   ├── checkpoint.py      Writes a resumable state file every turn (+ its test).
 │   ├── py_autoformat.sh   ruff format+fix on edited Python.
 │   ├── statusline.sh      host │ dir ⎇ branch │ model.
 │   ├── doc_drift.sh       Nudges when code has outrun docs.
+│   ├── morph-global-*.sh  Prompt/Stop pair that records each session's trace (opt-in).
 │   └── experimental/      Prototypes, NOT wired into settings.json (webfetch revalidation cache).
-├── bin/                Small tracked utilities: claude-bootstrap (set up a second machine),
-│                        morph-mirror (+ its test), otel-spooler (offline OTLP buffer).
+├── bin/                Small tracked utilities, plain scripts with no Claude Code knowledge:
+│                        claude-bootstrap (set up a second machine), morph-mirror (+ its test),
+│                        morph-recover-orphans (assemble traces for sessions that died),
+│                        otel-spooler (offline OTLP buffer), vault-write + vault-spooler
+│                        (queue notes offline, deliver on reconnect; + tests, + .service).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
 ├── settings.json       Wires the hooks + statusline.
+├── checkpoints/        Per-session state.json + timeline.jsonl. Local, pruned at 14 days, unversioned.
+├── vault-queue/        Notes awaiting delivery (+ sent/, dead/). Local, unversioned.
 └── .gitignore          Whitelist model — tracks config, excludes all secrets/history/transcripts.
 ```
 
@@ -102,6 +109,12 @@ The load-bearing insight: **"advisory vs. guaranteed."** A rule in `CLAUDE.md` i
 usually honors. A hook is a fact of the environment. So anything that *must* hold — don't wipe a disk,
 always format Python, always know which host you're on — is a hook, not a sentence.
 
+The corollary is that hooks are also how *state* gets written, not just how decisions get made: the
+same guarantee that vets a command is what lets a session leave a durable record of itself without
+being asked (`checkpoint.py`). And below all of it sits `bin/` — plain scripts with no Claude Code
+knowledge at all, runnable from a shell, a systemd unit, or an agent alike. Anything that has to work
+when Claude *isn't* running belongs there rather than in a hook.
+
 ---
 
 ## Decisions, codified
@@ -141,11 +154,34 @@ mainline push in the approvals file — instead of just stopping. That promotes 
 the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a
 safety net for accidents and overreach, explicitly *not* a security boundary.
 
-**Nothing to install.** Every executable piece here — all the hooks, `bin/otel-spooler.py` — runs on
-the Python 3 and shell your machine already has. Zero third-party packages, so there's no pip step, no
-venv, and nothing to install globally: unzip it and it works. That began as convenience and became a
-rule once the guardrail showed the other edge of it — a dependency you have to remember to install is
-a dependency that will be missing somewhere, and the failure is silent.
+**Test a hook the way the harness runs it — the runtime floor is the oldest box you have.** The same
+fail-open design that makes a guardrail bug harmless makes a guardrail *import* error invisible:
+PreToolUse reads a non-zero exit as a non-blocking error, so a hook that dies at import allows
+everything, silently. It did. `guardrail.py` used three constructs that need Python 3.9 or newer
+(`dict[str, Any]`, `collections.abc.Callable[...]`, `str.removeprefix`), and on an Ubuntu 20.04 box
+running Python 3.8.10 it raised TypeError before it ever read a command. `rm -rf /` sailed through. A
+guardrail you think you have is worse than none. The root cause wasn't the annotations; it was the
+tests, which did `import guardrail` and so never exercised the interpreter `#!/usr/bin/env python3`
+actually resolves to on that machine. `test_end_to_end_under_system_python()` now runs the hook as a
+subprocess over stdin and asserts the emitted decision, verified on 3.8.10, 3.11.13, and 3.13.9. Two
+rules fell out of it, and they apply to anything you add to `hooks/`: the **runtime** floor is the
+oldest interpreter in your fleet — here **3.8**, so `Dict[str, Any]` and `Optional[str]` from
+`typing`, never the PEP 585/604 builtins in a runtime assignment; mypy can still check at 3.9, because
+`from __future__ import annotations` means annotations are never evaluated and only *runtime*
+subscripting is a hazard. And every hook gets at least one test that invokes it as a process, not as
+an import.
+
+**Nothing to install.** Every executable piece here — all the hooks, `bin/otel-spooler.py`,
+`bin/vault-write` and `bin/vault-spooler.py` — runs on the Python 3 and shell your machine already
+has. Zero third-party packages, so there's no pip step, no venv, and nothing to install globally:
+unzip it and it works. That began as convenience and became a rule once the guardrail showed the
+other edge of it — a dependency you have to remember to install is a dependency that will be missing
+somewhere, and the failure is silent. The one thing a clone *can't* carry is the exec bit: if the
+repo's origin machine has `core.fileMode=false` (a network home directory, say), `chmod +x` isn't
+recorded by git, and a new hook lands 100644 and dies with "permission denied" on a fresh clone.
+Adding one means `git update-index --chmod=+x`, and `claude-bootstrap` reasserts the bits on arrival
+as a backstop — globbing `bin/` (everything but the `.service` units) rather than naming scripts,
+because a hand-written list drifts.
 
 **The safe-change protocol is the spine of infra work.** Discover current state and say it back; make
 the *most minimal* change; default to reversible + observe-only (log first, flip behavior as a
@@ -177,12 +213,65 @@ sediment of "Update:" notes. The `doc-steward` subagent reconciles docs against 
 context; the `doc_drift` hook nudges toward a sweep once code has moved substantially since the docs
 were last touched.
 
+**A killed session should cost one turn, not a day.** Sessions die — a dropped SSH pipe, a closed
+laptop, a killed terminal — and everything that reconstructs what you were doing used to run only at
+`Stop`. So the one case where you most need the record is exactly the case that produced none. The
+`checkpoint.py` hook writes a small `state.json` plus a `timeline.jsonl` under
+`checkpoints/<session-id>/` on every prompt, after every mutating tool call
+(`Bash|Write|Edit|MultiEdit`), and at `Stop`. Three things make it work. Its schema deliberately
+**mirrors** the harness's own `jobs/<id>/state.json` — `state`, `detail`, `needs`, `resumeSessionId`,
+`cwd`, transcript path and offset — so `/resume` and anything else that already understands a job
+record reads a checkpoint with no new parser; it mirrors that shape without writing into `jobs/`,
+which the harness owns. `state: completed` is written **only** by the Stop hook, which is what makes a
+checkpoint left at `active` mean *interrupted* rather than merely *old* — the whole signal falls out
+of having one writer. And the write is cheap enough to afford every turn: only the git branch/dirty
+enrichment costs a subprocess, so that's cached on a 60s cadence while the state file itself is
+rewritten unthrottled, since by the time the hook has been spawned, skipping the write saves nothing
+and costs fidelity. It prunes at 14 days, is stdlib-only, and exits 0 on every path. A record nobody
+reads isn't resilience, so `session_start.sh` surfaces a previous session in *this* directory that
+ended without a clean Stop, and `/resume` reads machine state **first** before the human-written
+continuity docs, and says so when they disagree: machine state for what happened, docs for what was
+intended. The same gap swallowed the opt-in session traces, which the `morph-global-*` hooks likewise
+assemble only at `Stop`; `bin/morph-recover-orphans` reconstructs the missing Stop payload and pipes
+it back into that same hook rather than reimplementing the assembler — one assembler, one set of bugs
+— and only touches a session that's been cold for hours, because assembling a *live* one would consume
+its pending state and leave the real Stop with nothing. The pattern generalizes past this repo: **if a
+record is only written at the end, the failures you most want to see produce no record at all.**
+
 **Memory is local; provenance lives in the repo.** Across sessions Claude keeps a per-project memory
 store (auto-managed, gitignored). The durable knowledge you *do* want to keep rides in the repo it
 belongs to: a `LEDGER.md` records what was *tried* — hypothesis, change, gate result, metric
-before→after, verdict — which is provenance for the experiments, not just what shipped. `/resume`
-stitches memory, the repo's continuity docs, and the ledger's tail together to reconstruct where you
-left off before touching anything.
+before→after, verdict — which is provenance for the experiments, not just what shipped. These are the
+*intent* half of what `/resume` reads — memory, the repo's continuity docs, and the ledger's tail,
+layered on top of the machine state above to reconstruct where you left off before touching anything.
+
+**Capture to a queue; keep exactly one writer of the canonical store.** For knowledge that should
+outlive the repo it came from — an applied infra change, a load-bearing decision, a runbook step
+learned the hard way — `bin/vault-write` enqueues one markdown-plus-frontmatter note into
+`vault-queue/`, and that is *all* it does. Capture is a plain file write: no daemon, no network, not
+even a localhost port, so it behaves identically on a server and on a laptop with no wifi, which means
+there's never a reason to skip writing something down "because we're offline." `bin/vault-spooler.py`
+drains the queue later over HTTP PUT to whatever endpoint you configure (`VAULT_UPSTREAM`), scoped to
+one inbox directory and nothing else; something on the other side files notes from there into their
+final home. That scoping is the design: **one writer of the canonical files**, so a two-way merge
+never has to exist.
+
+It's a fork of `bin/otel-spooler.py`, which was already a correct store-and-forward implementation,
+and the three places it diverges are all the same point: **knowledge is not telemetry.** The OTel
+spooler evicts its oldest spool file to stay under its cap — a lossy ring buffer, entirely right for
+metrics and silent data loss for a decision record — so here over-cap is a loud refusal at enqueue
+time and nothing already queued is ever deleted to make room. Delivery is idempotent rather than
+merely at-least-once: the filename carries a content hash, so a crash between the PUT and the cleanup
+replays onto the same inbox object instead of duplicating the note, and delivered notes move to
+`sent/` rather than being unlinked, so a failed cleanup can't resurrect one either. And failure is
+visible: a non-empty `dead/` (a 4xx quarantine, so one poison note can't wedge the queue) or an
+over-cap queue is surfaced in the session banner and by `--status`, not one stderr line nobody reads.
+5xx and offline back off 10s → 5min and keep everything, in order. Unlike the OTel spooler there's no
+HTTP listener at all — you control the writer, so the daemon is drain-only and nothing needs to be
+running for a note to survive. `bin/test_vault_spooler.py` covers delivery, crash-replay idempotency,
+offline-keeps-everything, 4xx-quarantine vs. 5xx-retry, and the no-eviction cap against a real HTTP
+server. Point it at your own endpoint, or leave `VAULT_UPSTREAM` unset and the queue is simply a local
+capture log.
 
 ---
 
@@ -195,7 +284,13 @@ things to keep honest: the top-level catch-all only ignores *new top-level* entr
 defense is a second layer of **pattern ignores** (`*.env`, `*.key`, `*.pem`, `*.crt`, `*.p12`,
 `id_rsa*`, plus caches, `.credentials.json`, `history.jsonl`, `sessions/`, `projects/`) that hold
 *even inside* a versioned dir. This same file, installed as your real `~/.claude/.gitignore`, keeps
-your private state out of git while you version your config in place.
+your private state out of git while you version your config in place. The runtime state the hooks
+produce is local by the same rule: `checkpoints/` and `vault-queue/` are machine-written, not
+authored, so the top-level catch-all leaves them alone. They're also the two directories that grow on
+their own, so each is bounded where it's written — checkpoints prune at 14 days, the vault queue
+refuses new entries at its cap rather than evicting — because nothing here should fill a disk while
+you're not looking. Spooler credentials live in `~/.config/*.env`, outside the tree entirely; only the
+`.example` files are tracked.
 
 ---
 
