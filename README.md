@@ -37,6 +37,7 @@ relevant.** Almost every decision below follows from that.
 │   ├── infra.md.example   Host map + the safe-change protocol.            (copy → infra.md)
 │   ├── knowledge-work.md   Writing / research / decision doctrine.
 │   ├── loops.md            Loop doctrine — checker-first, keep-or-rollback, ledgered.
+│   ├── prerelease.md       Declared "nobody uses this yet" — lifts the infra gate for cloud projects.
 │   ├── security.md         Trust-boundary doctrine — threat-model first, agents are a boundary too.
 │   ├── software.md         An example stack doctrine + quality gate.       (adapt to your stack)
 │   └── voice.md.example    How to codify YOUR writing voice.               (copy → voice.md)
