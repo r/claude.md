@@ -13,6 +13,7 @@ Three modes — load the matching deep-dive when it's relevant:
 Plus cross-cutting rules — load each when its trigger fires:
 - **Autonomous / recurring iteration** (`/loop`, `/improve-loop`, an iterating workflow, a scheduled agent — anything that repeats until something is "better") → read `~/.claude/rules/loops.md`. Core law: no high-fidelity checker, no loop; and infra never loops (it goes through `/safe-change`).
 - **Trust boundaries** (auth, input handling, secrets, third-party data, or an agent's permissions and tool surface) → read `~/.claude/rules/security.md`. Threat-model first; the system prompt is not a security boundary.
+- **Cloud infra on a project nobody uses yet** (a change the gates below are about to block) → read `~/.claude/rules/prerelease.md`. If the project declares itself pre-release, mutate freely; the declaration is never inferred. Self-hosted infra is never pre-release.
 - **Fanning out across subagents** (a workflow, a multi-lens review, a migration over many files) → read `~/.claude/rules/agent-orchestration.md`. The orchestrator is the main loop; personas never invoke personas.
 
 ## How I work
@@ -39,6 +40,13 @@ record it to the approvals queue, and keep going (see **Auto mode**).*
 - Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.
 
 *(These three are also enforced deterministically by the `guardrail` hook, not just requested here.)*
+
+**The pre-release carve-out.** These gates are calibrated for changes *people feel*. If a cloud
+project declares itself pre-release (`.claude/stage.json` — see `rules/prerelease.md`), infra
+mutation inside that project's own scope is **not** gated: create, replace, and destroy freely, in
+auto mode too. Money, shared blast radius, unbacked data deletion, and secrets stay gated regardless.
+The declaration is read from the marker file or asked for once — **never inferred** from an
+environment name, and never assumed in order to unblock yourself. No marker means the normal gates.
 
 ## Auto mode — hands-off / autonomous operation
 Some sessions run without me watching each step: auto-accept edits, bypass mode, or autonomous runs

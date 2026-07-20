@@ -62,6 +62,10 @@ repeat until stop:
   zone.
 - **Docs / research / content** → warm. Loop to gather or draft, but a human reads before anything
   ships outward.
+- **A declared pre-release cloud project** (`.claude/stage.json`, see `prerelease.md`) → the
+  software setting, not the infra one. Nobody's using it, `terraform apply` back is the rollback, so
+  a real checker (plan diff, smoke test, health check) earns a hot loop. Money, shared blast radius,
+  and unbacked deletion still queue. Declared only — never inferred to unblock a loop.
 - **Infra, firewall, DNS, storage, deploys, anything outward-facing or paid** → **coldest. Never
   autonomously looped.** Rollback isn't `git reset`, the "checker" is production, and a bad step can
   fill a disk or flip behavior. These go through `/safe-change` (observe-first, timestamped backup,

@@ -83,7 +83,8 @@ therefore **python3** itself: without it the guardrail doesn't run at all.
 ```
 CLAUDE.md        Always-loaded global doctrine. EDIT THIS FIRST — make it yours.
 settings.json    Wires the hooks + status line (paths use $HOME, so no editing needed).
-rules/           software.md, loops.md, knowledge-work.md, plus two templates you personalize:
+rules/           software.md, loops.md, knowledge-work.md, prerelease.md, plus two templates you
+                 personalize:
                  infra.md.example (host map + safe-change) and voice.md.example (your prose voice).
 commands/        Slash commands: /whereami /safe-change /resume /improve-loop /ledger /doc-sweep
                  /edit /think.
