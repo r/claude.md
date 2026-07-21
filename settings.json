@@ -53,7 +53,7 @@
       },
       {
         "hooks": [
-          { "type": "command", "command": "$HOME/.claude/hooks/vault_nudge.py" }
+          { "type": "command", "command": "$HOME/.claude/hooks/vault_curator.py" }
         ]
       }
     ],

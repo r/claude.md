@@ -55,7 +55,8 @@ relevant.** Almost every decision below follows from that.
 │   ├── py_autoformat.sh   ruff format+fix on edited Python.
 │   ├── statusline.sh      host │ dir ⎇ branch │ model.
 │   ├── doc_drift.sh       Nudges when code has outrun docs.
-│   ├── vault_nudge.py     Nudges when a working session recorded nothing durable (+ its test).
+│   ├── vault_curator.py   Detached background agent that records durable knowledge (+ its test).
+│   ├── vault_nudge.py     Zero-cost fallback: nudges instead of auto-recording (+ its test).
 │   ├── morph-global-*.sh  Prompt/Stop pair that records each session's trace (opt-in).
 │   └── experimental/      Prototypes, NOT wired into settings.json (webfetch revalidation cache).
 ├── bin/                Small tracked utilities, plain scripts with no Claude Code knowledge:
@@ -278,17 +279,30 @@ capture log.
 The catch with capture-when-worthwhile is that *nothing fires it*. Writing a note is a judgment call
 the model makes, and a judgment call it never makes is indistinguishable from one it decided against.
 In practice that skews the store hard toward chunky, memorable work — a big infra change gets written
-up; a two-hour debugging session that uncovered a real pattern just ends. `hooks/vault_nudge.py`
-closes that gap the same way `doc_drift.sh` does for docs: a **Stop hook, suggest-mode only**. When a
-session made real changes (a threshold of mutating tool calls) and invoked neither `bin/vault-write`
-nor its skill, it prints one line — with the domain pre-picked, since that's the field guesses get
-wrong — asking whether anything was worth keeping. It never writes a note, never blocks the Stop, and
-fires once per session. It's a prompt to judge, not an order to write: "nothing durable here" is a
-fine answer, and the point is only that you get *asked*. Two false positives are worth knowing about
-because they're easy to reintroduce, and both are pinned as regression tests: queue-file mtimes are
-not a session signal (a spooler delivery rewrites them, so old notes look new), and a *mention* of the
-tool in a command is not an *invocation* of it. Stdlib-only and fail-open like every hook here, so a
-bug in it can never eat a Stop.
+up; a two-hour debugging session that uncovered a real pattern just ends. And writing a note *inline*
+is itself the problem: it's a model round-trip in the middle of iteration, the one part of the vault
+path that wasn't already backgrounded (enqueue is instant, delivery is the spooler's job). The
+judgment was the last thing on the critical path.
+
+`hooks/vault_curator.py` moves it off. It's a **Stop hook** that, when a session did real work and
+recorded nothing itself, fires a **detached** `claude -p` (a cheap model) that reads a digest of the
+session and enqueues any durable notes on its own. The interactive session returns immediately and
+never waits; the queue and spooler carry the rest. Capture becomes automatic *and* off your loop.
+
+The design worth stealing is the **least-agency spawn**, because the background agent is driven by
+transcript content and transcript content isn't fully trusted (model and tool output are untrusted
+input — see the security section). So it runs with **no permission bypass**, and `--allowedTools`
+scopes it to exactly `Read(<the digest>)` and `Bash(<bin/vault-write> *)` — it can read one file and
+run one binary, nothing else an injection could borrow. Recursion is blocked by an env flag the
+child inherits (its own Stop sees the flag and bails), which holds without `--bare` — worth avoiding,
+since `--bare` disables OAuth and breaks subscription auth. The digest carries intent, the model's
+own text, and the list of actions taken, but **never tool results** — the bulk of the transcript and
+where a secret would hide — bounded so the background call stays cheap. It degrades safely at every
+step: no vault installed → silent; disabled (`VAULT_CURATOR=0`) or no `claude` on PATH → it falls
+back to `hooks/vault_nudge.py`, a zero-cost one-line reminder so a human is still asked; any error →
+exit 0, because like every hook here it's stdlib-only and fail-open and must never eat a Stop. The
+nested spawn can't be unit-tested without invoking a real model, so the security surface is pinned at
+the argv seam instead — the tests assert the no-bypass and exact tool-scoping properties directly.
 
 ---
 

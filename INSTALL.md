@@ -63,7 +63,7 @@ and the profile is `eval`'d in-process rather than copied down.
 
 | Tool | Needed for | If missing |
 |------|-----------|------------|
-| **python3** | session banner, status line, doc-drift + vault nudges, guardrail | those hooks no-op — including the guardrail, which then **fails open**; install via Xcode CLT (`xcode-select --install`) or `brew install python` |
+| **python3** | session banner, status line, doc-drift + vault curator/nudge, guardrail | those hooks no-op — including the guardrail, which then **fails open**; install via Xcode CLT (`xcode-select --install`) or `brew install python` |
 | **git** | the loop / commit / continuity workflow | core workflow features degrade |
 | ruff *or* uv | Python auto-format on save | that hook no-ops (optional) |
 | docker | container count in the session banner | banner omits it (optional) |
@@ -90,8 +90,8 @@ commands/        Slash commands: /whereami /safe-change /resume /improve-loop /l
                  /edit /think.
 agents/          doc-steward, infra-reviewer, editor, thought-partner.
 hooks/           session_start, guardrail (+rules +tests), py_autoformat, statusline, doc_drift,
-                 vault_nudge (+ its test), morph-global-{prompt,stop} (opt-in: record every
-                 session — see below).
+                 vault_curator (+ vault_nudge fallback, +tests), morph-global-{prompt,stop}
+                 (opt-in: record every session — see below).
 bin/             claude-bootstrap (set up a second machine — see above), morph-mirror (+ its test),
                  otel-spooler (offline OTLP buffer — see docs/OTEL.md) + its systemd unit.
 bootstrap.profile.example
