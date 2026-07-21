@@ -55,6 +55,7 @@ relevant.** Almost every decision below follows from that.
 │   ├── py_autoformat.sh   ruff format+fix on edited Python.
 │   ├── statusline.sh      host │ dir ⎇ branch │ model.
 │   ├── doc_drift.sh       Nudges when code has outrun docs.
+│   ├── vault_nudge.py     Nudges when a working session recorded nothing durable (+ its test).
 │   ├── morph-global-*.sh  Prompt/Stop pair that records each session's trace (opt-in).
 │   └── experimental/      Prototypes, NOT wired into settings.json (webfetch revalidation cache).
 ├── bin/                Small tracked utilities, plain scripts with no Claude Code knowledge:
@@ -273,6 +274,21 @@ running for a note to survive. `bin/test_vault_spooler.py` covers delivery, cras
 offline-keeps-everything, 4xx-quarantine vs. 5xx-retry, and the no-eviction cap against a real HTTP
 server. Point it at your own endpoint, or leave `VAULT_UPSTREAM` unset and the queue is simply a local
 capture log.
+
+The catch with capture-when-worthwhile is that *nothing fires it*. Writing a note is a judgment call
+the model makes, and a judgment call it never makes is indistinguishable from one it decided against.
+In practice that skews the store hard toward chunky, memorable work — a big infra change gets written
+up; a two-hour debugging session that uncovered a real pattern just ends. `hooks/vault_nudge.py`
+closes that gap the same way `doc_drift.sh` does for docs: a **Stop hook, suggest-mode only**. When a
+session made real changes (a threshold of mutating tool calls) and invoked neither `bin/vault-write`
+nor its skill, it prints one line — with the domain pre-picked, since that's the field guesses get
+wrong — asking whether anything was worth keeping. It never writes a note, never blocks the Stop, and
+fires once per session. It's a prompt to judge, not an order to write: "nothing durable here" is a
+fine answer, and the point is only that you get *asked*. Two false positives are worth knowing about
+because they're easy to reintroduce, and both are pinned as regression tests: queue-file mtimes are
+not a session signal (a spooler delivery rewrites them, so old notes look new), and a *mention* of the
+tool in a command is not an *invocation* of it. Stdlib-only and fail-open like every hook here, so a
+bug in it can never eat a Stop.
 
 ---
 

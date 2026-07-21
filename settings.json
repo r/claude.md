@@ -50,6 +50,11 @@
         "hooks": [
           { "type": "command", "command": "$HOME/.claude/hooks/morph-global-stop.sh" }
         ]
+      },
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/vault_nudge.py" }
+        ]
       }
     ],
     "UserPromptSubmit": [
