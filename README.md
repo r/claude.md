@@ -193,6 +193,16 @@ which host you're on; back up before replacing and state the rollback. Reinforce
 `session_start` banner (which host?), the guardrail (deny/ask), and the `infra-reviewer` subagent
 (how do we know we got it right?).
 
+**A handoff is a script, not a wall of shell.** Some steps only you can run — `sudo`, an interactive
+login, a 2FA prompt, a box Claude isn't sitting on. The failure mode there is a chat message
+containing nine commands, pasted one at a time, with no way to tell afterward which one actually
+failed. So anything multi-line, privileged, or order-sensitive gets written out as an executable
+script — `set -euo pipefail`, a header saying what it does and **which host to run it on**, an `echo`
+before each step, backup-and-rollback if it's destructive, no secrets inlined — and you get exactly
+one line to run. A single short command stays inline instead, because `! <command>` in the prompt
+already runs it and feeds the output straight back into the session. Same instinct as the rest of
+this: the human step should be reviewable before it runs and diagnosable after.
+
 **A loop is only as good as its checker.** Any recurring or autonomous iteration is designed as a
 loop — propose → gate → measure → keep-or-rollback → log — and the checker comes *first*: no
 high-fidelity feedback, no loop. That checker is either a scalar metric or a boolean quality gate,

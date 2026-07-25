@@ -28,6 +28,20 @@ Plus cross-cutting rules — load each when its trigger fires:
   of re-explaining from scratch. "Sounds good" / silence is not a yes; a real answer is. (In **auto
   mode** there's no one to answer — proceed on best judgment and log the call; see below.)
 
+## When you need *me* to run it
+Some steps only I can run: `sudo`, an interactive login, a 2FA prompt, a physical device, a box
+you're not on. Hand me something runnable, not a wall of shell to copy out of chat.
+- **One short command** → give it inline and I'll run it with `! <command>` in the prompt, so its
+  output lands back in the session.
+- **Multi-line, `sudo`-requiring, or order-sensitive** → **write me a script.** In the repo if it
+  belongs with the work, otherwise the session scratchpad. `chmod +x` it and hand me exactly one line
+  to run (`! sudo bash /path/to/thing.sh`) — never a numbered list of commands to paste one at a time.
+- **What the script must have:** `set -euo pipefail`; a header comment saying what it does, why it
+  needs me, and **which host to run it on**; an `echo` before each step so I can see where it stopped;
+  idempotent where it can be. Anything destructive takes its timestamped backup first and prints the
+  rollback. Never inline a secret — read it from the environment or prompt for it.
+- Then tell me **what success looks like** and what to paste back if you need the result.
+
 ## Never do these without my explicit ok
 *In **auto mode** these still may not happen unattended — but don't block waiting on me. Skip the item,
 record it to the approvals queue, and keep going (see **Auto mode**).*
