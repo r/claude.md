@@ -4,6 +4,11 @@
 # (SSH, servers, a homelab). Read-only; always exits 0.
 set +e
 
+# Read-only means read-only: `git status` normally rewrites the index to cache
+# refreshed stat info, and a hook killed by a timeout would leave that lock
+# orphaned. See the note in statusline.sh.
+export GIT_OPTIONAL_LOCKS=0
+
 host=$(hostname 2>/dev/null || echo unknown)
 ips=$(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^(10|192\.168|172\.)' | head -4 | tr '\n' ',' | sed 's/,$//; s/,/, /g')
 cwd=$(pwd)

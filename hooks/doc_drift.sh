@@ -7,6 +7,12 @@
 # up exactly when code has outrun the docs. Rate-limited to once per 15 min/repo.
 set +e
 
+# Every git call below only reads state, so none may take .git/index.lock — a
+# Stop hook killed mid-run would orphan it and wedge every later git command in
+# the repo. This covers `git status`; see the note at `changed=` for the working
+# -tree diff, which needs more than the env var.
+export GIT_OPTIONAL_LOCKS=0
+
 cwd=$(pwd)
 root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || exit 0   # git repos only
 
@@ -21,9 +27,16 @@ last_doc=$(git -C "$root" log -1 --format=%H -- '*.md' 'docs/' '*README*' 2>/dev
 [ -z "$last_doc" ] && exit 0
 
 # changed files since then (committed + staged + working tree), minus docs/tests
+#
+# The committed half is a commit-range diff, which never touches the index. The
+# uncommitted half deliberately uses `git status` rather than `git diff`: a
+# working-tree `git diff` refreshes and REWRITES the index, taking
+# .git/index.lock to do it, and — unlike `git status` — it ignores
+# GIT_OPTIONAL_LOCKS entirely (verified on git 2.34.1). `status --porcelain
+# -uno --no-renames | cut -c4-` yields the same set of paths, lock-free.
 changed=$( { git -C "$root" diff --name-only "${last_doc}..HEAD";
-             git -C "$root" diff --name-only;
-             git -C "$root" diff --name-only --cached; } 2>/dev/null | sort -u )
+             git -C "$root" status --porcelain --untracked-files=no --no-renames \
+               | cut -c4-; } 2>/dev/null | sort -u )
 code=$(printf '%s\n' "$changed" | grep -vE '\.(md|rst|txt|adoc)$|(^|/)docs/|README|(^|/)tests?/|(^|/)test_|_test\.' | grep -c .)
 
 # approximate lines changed in the committed range

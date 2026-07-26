@@ -20,6 +20,12 @@ Do not touch code yet. Establish and report back:
    - **scalar** → the exact command that prints the number, and whether lower or higher wins, or
    - **boolean** → the quality gate command(s) + how you'll judge task-satisfaction.
    If there's no real checker for this target, say so and stop — propose building one first.
+   Then name the two anchors that keep the checker honest:
+   - **the counter-metric** → the one number that must *not* regress while the scalar improves, and
+     the command that reads it. A loop aimed at one number finds the cheat that moves it.
+   - **the frozen check** → what's held out of the loop entirely (a test slice it never runs
+     per-iteration, a second dataset, the acceptance criteria), and how often it's run (every K
+     rounds and at the end). Same stop rule as the checker: **can't name these, don't loop.**
 3. **The spec** (the leash — autoresearch's `program.md`). Write it to `.claude/loops/<name>.md`:
    goal, the checker command, the **search space** (which files/approaches are fair game), and
    **hard constraints** (what not to touch, "never weaken a test"). This file is stable and
@@ -38,12 +44,16 @@ Each iteration:
    search space.
 2. Apply it. Run the **quality gate** — this is a hard filter. Red ⇒ roll back (`git reset --hard`),
    log, next iteration. Never loosen the gate or delete a failing test to get green.
-3. Run the checker. **Scalar:** keep only if strictly better than best-so-far by a real margin
-   (ignore noise). **Boolean:** keep if the gate is green *and* task-satisfaction holds.
+3. Run the checker **and the counter-metric**. **Scalar:** keep only if strictly better than
+   best-so-far by a real margin (ignore noise) **and** the counter-metric hasn't regressed.
+   **Boolean:** keep if the gate is green *and* task-satisfaction holds *and* the counter holds.
 4. **Keep** = one atomic commit (change + its tests/docs). **Reject** = `git reset --hard`.
-5. Append an entry to `LEDGER.md` (format in `loops.md`): hypothesis, change, gate, metric
-   before→after, verdict + commit sha, one-sentence why.
-6. Stop when: budget/max-iterations hit, or **K consecutive rejects** (dry). Never run unbounded.
+5. Append an entry to `LEDGER.md` (format in `loops.md`): hypothesis, change, gate, metric and
+   counter before→after, verdict + commit sha, one-sentence why.
+6. Every K rounds, run the **frozen check**. If it disagrees with the scalar, believe the frozen
+   one: stop the loop, say so, and treat every commit since the last clean frozen check as suspect.
+   Don't quietly keep going.
+7. Stop when: budget/max-iterations hit, or **K consecutive rejects** (dry). Never run unbounded.
 
 ## Don't rationalize the gate away
 The one failure mode that silently rots a loop is weakening the checker to get a green.
@@ -54,13 +64,16 @@ The one failure mode that silently rots a loop is weakening the checker to get a
 | "This test is flaky, skip/delete it." | Then the loop is blind exactly where it's failing. Fix the flake or fix the code. |
 | "The scalar barely moved, count it as a win." | Noise-level wins accumulate into a lie about progress. Strictly-better by a real margin, or roll back. |
 | "I'll write the ledger later." | The ledger is the loop's memory across compaction/resume; unwritten means it didn't happen. |
+| "The counter-metric slipped a bit, but the main number's way up." | That's a trade I didn't agree to. Roll it back and bring me the trade — renegotiating the spec is a conversation, never a loop iteration. |
+| "The frozen check is stale/slow, skip it this round." | The frozen check is the only thing standing between you and twenty commits of fitting the checker. Run it or stop the loop. |
 
 **Red flags:** the gate command changed mid-loop; a test skipped/deleted to pass; a step kept inside
 the noise margin; more than one change bundled into a single iteration; an unbounded run with no stop
-condition.
+condition; the frozen set quietly folded into the per-iteration checker.
 
 ## When it stops
 
-Summarize: net metric baseline→final, how many steps kept vs rolled back, the branch + commits, and
-what the ledger says is still worth trying. Leave it on the branch for me to review and merge — don't
+Summarize: net metric baseline→final, where the counter-metric ended up, the last frozen-check
+result, how many steps kept vs rolled back, the branch + commits, and what the ledger says is still
+worth trying. Leave it on the branch for me to review and merge — don't
 merge to `main` or push without my ok.

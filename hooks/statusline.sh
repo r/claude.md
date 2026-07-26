@@ -3,6 +3,16 @@
 # Reads Claude Code's session JSON on stdin. Always prints something; never fails.
 set +e
 
+# The statusline runs constantly and on a short timeout — a SIGKILL mid-`git
+# status` orphans a zero-byte .git/index.lock in whatever repo you're in, and
+# every later git command then refuses to run. `git status` looks read-only but
+# rewrites the index to cache refreshed stat info, taking the lock to do it.
+# GIT_OPTIONAL_LOCKS=0 skips that refresh (git(1); git-status(1) recommends
+# exactly this for "scripts running status in the background"). Cost: a file
+# that is only stat-dirty may show the * for one refresh. Never take a lock we
+# might not live long enough to release.
+export GIT_OPTIONAL_LOCKS=0
+
 input=$(cat)
 model=$(printf '%s' "$input" | python3 -c 'import json,sys
 try:

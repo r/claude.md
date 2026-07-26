@@ -19,6 +19,7 @@ the next time you touch this code. Format and rationale live in `~/.claude/rules
 - **Change:** what was actually done (files / approach)
 - **Gate:** green | red (which check failed) | n/a
 - **Metric:** <before> → <after>  (checker: `<command>`)   ← omit if not measurable
+- **Counter:** <before> → <after>  (the metric that had to not regress)   ← omit if none
 - **Verdict:** kept (commit `<sha>`) | rolled back | decided against
 - **Why:** the one sentence that makes this worth keeping
 ```

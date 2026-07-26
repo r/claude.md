@@ -22,6 +22,12 @@ sit on the **autonomy slider**, as hot or cold as the blast radius allows. The o
    that isn't green is rejected outright, no matter what the scalar says). If you can't name the
    checker, you're not ready to loop — stop and build it, or do the work by hand.
 
+   **And a counter-metric, named at the same time.** Every scalar gets one paired metric that must
+   not regress — the anti-Goodhart clause. Optimizing p95 latency? Correctness and coverage are the
+   counters. Shrinking the bundle? Startup time and test count. A loop pointed at one number will
+   find the cheat that moves it, and the cheat almost always shows up as damage somewhere the scalar
+   can't see. No counter-metric means the checker is optimizing *you*.
+
 2. **A cheap iteration.** Karpathy's worked because one experiment was ~5 minutes. Make the
    checker fast (subset of tests, one endpoint, a micro-benchmark) or the loop is unaffordable.
 
@@ -46,13 +52,15 @@ best = baseline
 repeat until stop:
     propose ONE change                    # smallest testable slice, guided by the spec's search space
     run the quality gate                  # HARD filter — red ⇒ rollback, log, next
-    m = checker()                         # scalar measure, or task-satisfaction for boolean loops
-    if better(m, best) by a real margin:  # strictly better; ignore noise-level wins
+    m, c = checker(), counter()           # the gradient, and the thing that must not regress
+    if better(m, best) by a real margin   # strictly better; ignore noise-level wins
+       and not regressed(c):              # a win bought by damage elsewhere is not a win
         commit (change + its tests/docs)  # atomic; this is the "keep"
         best = m
     else:
         git reset --hard                  # the "rollback" — clean, total
     append to LEDGER                       # hypothesis, change, gate, metric before→after, kept?, why
+    every K rounds: run the frozen check   # the held-out anchor the loop never optimizes against
 ```
 
 ## The autonomy slider — where each kind of work sits
@@ -85,6 +93,13 @@ it's ever scheduled.
 - **Never weaken the checker to make a step "pass."** Loosening the gate, relaxing the metric, or
   deleting a failing test to get a green is the one way a loop silently rots. A rejected step is a
   *result*, not a problem to engineer around.
+- **Freeze something the loop can never see.** The subtler rot isn't a weakened gate — it's twenty
+  honest iterations hill-climbing a number that stopped standing for the thing. So hold one anchor
+  out of the loop entirely: a slice of tests it never runs per-iteration, a second dataset, a
+  benchmark, the acceptance criteria in the spec. Check it every K rounds and at the end. **If the
+  frozen check and the scalar disagree, believe the frozen one** — the loop has been fitting the
+  checker, and every commit it kept since the last clean frozen check is suspect. An anchor the
+  loop can read is an anchor the loop will optimize.
 - **Keep the spec stable and human-owned.** The steering file (goal + search space + constraints)
   is the leash — the equivalent of autoresearch's `program.md`. The agent rewrites the *artifact*,
   never the spec. If the spec is wrong, that's a conversation, not a loop iteration.
@@ -100,6 +115,7 @@ attempt — this is provenance and it's what `/resume` reads to reconstruct a lo
 - **Change:** what was actually edited (files / approach)
 - **Gate:** green | red (which check failed)
 - **Metric:** <before> → <after>  (checker: `<command>`)
+- **Counter:** <before> → <after>  (the metric that had to not regress)
 - **Verdict:** kept (commit `<sha>`) | rolled back
 - **Why:** the one sentence that makes this entry worth keeping
 ```
