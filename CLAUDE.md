@@ -27,6 +27,30 @@ Plus cross-cutting rules — load each when its trigger fires:
   your current best guess plus a rough confidence to each, so I can correct a wrong assumption instead
   of re-explaining from scratch. "Sounds good" / silence is not a yes; a real answer is. (In **auto
   mode** there's no one to answer — proceed on best judgment and log the call; see below.)
+  **Reserve this for forks that actually diverge** — readings that lead to *materially different
+  work*: a different design, a different blast radius, work I'd have to throw away. A routine
+  judgment call with an obvious default is not a fork. Make the call, say which way you went in one
+  clause, and keep moving. A question I rubber-stamp is a question that should have been a decision.
+
+## Shell commands — keep them matchable
+The permission system matches a command on its **leading prefix**. A command that opens with a
+wrapper is unmatchable by any allow-rule, so it prompts every single time no matter how harmless it
+is. That is not a safety gate firing; it's the matcher going blind. Measured on the author's setup,
+it was **51% of every Bash approval prompt** over 29 days. So:
+
+- **Never open a command with `cd X && …`.** Use the tool's own working directory, an absolute path,
+  or the command's own flag: `git -C <repo> status`, `docker compose -f <file> ps`, `uv run --project
+  <dir> pytest`, `ls /abs/path`. A `(cd X && …)` subshell reads the same and still fails to match, so
+  prefer the flag.
+- **Don't lead with `timeout`, `set -euo pipefail`, `export`, or a `for` loop** in a one-off call.
+  Put the real verb first. A long-running command takes its timeout from the tool's own `timeout`
+  parameter (and `BASH_DEFAULT_TIMEOUT_MS` in `settings.json`), not a `timeout` prefix.
+- **One command per call when it's cheap to.** Chaining five reads behind `&&` to save a round trip
+  turns five allowlisted no-ops into one unmatchable prompt. Batch independent calls in parallel
+  instead — that's free and it stays matchable.
+- This is about *prompt noise, not permission*. Never restructure a command to dodge a gate that is
+  meant to fire: the `guardrail` hook still sees the whole command, and anything on the "Never do
+  these" list below still stops and waits regardless of how it is written.
 
 ## When you need *me* to run it
 Some steps only I can run: `sudo`, an interactive login, a 2FA prompt, a physical device, a box

@@ -157,6 +157,29 @@ mainline push in the approvals file — instead of just stopping. That promotes 
 the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a
 safety net for accidents and overreach, explicitly *not* a security boundary.
 
+**A gate you always say yes to is not a gate — measure the accept rate, not the prompt count.** The
+failure mode of a careful setup is not that it blocks too little; it's that it asks so often you stop
+reading and start blanket-accepting, which quietly disarms every gate at once. That is measurable, so
+measure it. Claude Code's OpenTelemetry `tool_decision` event carries a `source` (`config` means
+silently auto-allowed, `user_*` means a human was actually interrupted) and a `decision`. Twenty-nine
+days on the author's setup: 30,205 silent accepts against ~495 human prompts — only 1.6% of tool
+calls, which sounds healthy — at a **97.6% accept rate**, which is not. A gate cleared 97.6% of the
+time has stopped carrying information. The events also carry `tool_use_id` but not the command text,
+so joining them against the local session transcripts recovers exactly *which* commands are doing the
+interrupting. Two things fell out. **Half the prompts weren't gates at all:** 51% of the Bash ones
+opened with `cd X && …`, and since the matcher works on leading prefix, a wrapper prefix is
+unmatchable by construction — pure noise (hence the "keep them matchable" rule in `CLAUDE.md`). And
+**the agent's own clarifying questions were 18% of the interruptions at a 94% accept rate**, which is
+a question that should have been a decision. The fix is a `permissions.allow` list in `settings.json`
+covering read-only and routine-local verbs, so the prompts that remain are the ones that mean
+something. What it deliberately *excludes* is the discipline: `ssh`, heredoc interpreters, `docker
+exec`, `rm`, `find`, `curl`, `git push`/`checkout`/`reset` all prompted and were all accepted every
+time, but allowlisting arbitrary-execution verbs is allowlisting everything and rebuilds the same
+problem one layer down. Note that an allow-rule only suppresses the *prompt* — the `guardrail` hook
+still inspects every command and can deny outright. Worth knowing before you try this: an agent
+cannot apply its own allowlist, because widening its own permission rules trips the auto-mode
+classifier's self-modification check. Correctly. Author the change, then apply it by hand.
+
 **Test a hook the way the harness runs it — the runtime floor is the oldest box you have.** The same
 fail-open design that makes a guardrail bug harmless makes a guardrail *import* error invisible:
 PreToolUse reads a non-zero exit as a non-blocking error, so a hook that dies at import allows
