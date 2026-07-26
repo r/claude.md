@@ -55,20 +55,35 @@ def _clip(text: str, limit: int = DETAIL_MAX) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+def _git_env() -> Dict[str, str]:
+    """Environment for read-only git calls: never take the index lock.
+
+    `git status` looks read-only but rewrites the index to cache refreshed stat
+    info, holding .git/index.lock while it does. These calls run under a 3s
+    timeout, and subprocess's timeout path SIGKILLs the child — which would
+    orphan a zero-byte lock in your repo and wedge every later git command.
+    GIT_OPTIONAL_LOCKS=0 makes git skip the optional refresh entirely (git(1)).
+    """
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    return env
+
+
 def _git(cwd: str) -> Dict[str, Any]:
     """Branch + dirty flag. The only expensive part of a checkpoint, hence cached."""
     info: Dict[str, Any] = {"branch": None, "dirty": False}
+    env = _git_env()
     try:
         branch = subprocess.run(
             ["git", "-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, text=True, timeout=3, env=env,
         )
         if branch.returncode != 0:
             return info
         info["branch"] = branch.stdout.strip() or None
         status = subprocess.run(
             ["git", "-C", cwd, "status", "--porcelain"],
-            capture_output=True, text=True, timeout=3,
+            capture_output=True, text=True, timeout=3, env=env,
         )
         info["dirty"] = bool(status.stdout.strip())
     except Exception:

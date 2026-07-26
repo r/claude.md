@@ -45,6 +45,33 @@
 - **Size by resource:** small = no I/O (the default suite), medium = localhost only, large = external
   and opt-in (kept out of the default run — same reason as the determinism rule above).
 
+## Shelling out — the mistakes that actually cost time
+Measured, not guessed: an audit of 913 failed tool calls across 34 projects on one machine
+(2026-07-26). These are the recurring ones, in order of how much time they burned.
+
+- **Never poll with a foreground `sleep`.** ~74 of those failures were a `sleep`-and-check loop —
+  either blocked outright or eating the entire command budget waiting. Background work re-invokes you
+  when it finishes; that notification is the signal. If you must wait on something the harness can't
+  see, use `Monitor` with an until-loop (`until <check>; do sleep 2; done`), never `sleep N; <check>`.
+- **A command you expect to run long gets an explicit timeout.** 114 timeouts, and only 16 of them
+  had one set. Builds, `docker build`, a `git push` over a slow link, a first-run dependency sync,
+  ssh into a slow box — say the number up front or run it in the background. Discovering the limit by
+  hitting it costs the full wait *and* the retry.
+- **`pkill -f <pattern>` matches its own wrapper shell.** 57 exit-144s were a command killing itself
+  mid-run. Narrow the pattern, or exclude self: `pgrep -f pat | grep -v $$ | xargs -r kill`.
+- **Never delete a lock file you haven't proven is orphaned.** A stale `.git/index.lock` blocked 32
+  calls across 9 repos, and the transcripts show a blind `rm -f .git/index.lock` before a merge —
+  which silently corrupts the index if a real git process *was* holding it. Prove no owner
+  (`lsof`/`pgrep`), then clear it, and fix the thing that leaked it. (The leak here was hooks running
+  `git status` on a short timeout — see `hooks/test_git_locks.sh`.)
+- **Don't assume `python` is on PATH.** Plenty of systems ship only `python3`. A bare `python` in a
+  heredoc exits 127 and the edit it was carrying silently never happens.
+- **Don't chain an optional command with `&&`.** `cmd && ls docs` returns non-zero and reads as a
+  failure when the real work succeeded. Use `;` or `|| true` for the optional tail.
+- **Quote ssh payloads with a heredoc, not nested single quotes.** `ssh host '… "$F.bak.$(date)" …'`
+  is where the `unexpected EOF` errors come from. `ssh host bash -s <<'EOF'` and let the remote shell
+  parse it.
+
 ## Observability
 Instrument as you build, the way you test — not bolted on after an incident.
 - **Define "working" first.** Write the 2–4 questions you'd need answered at 3am ("is checkout
