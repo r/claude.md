@@ -14,7 +14,7 @@ Plus cross-cutting rules — load each when its trigger fires:
 - **Autonomous / recurring iteration** (`/loop`, `/improve-loop`, an iterating workflow, a scheduled agent — anything that repeats until something is "better") → read `~/.claude/rules/loops.md`. Core law: no high-fidelity checker, no loop; and infra never loops (it goes through `/safe-change`).
 - **Trust boundaries** (auth, input handling, secrets, third-party data, or an agent's permissions and tool surface) → read `~/.claude/rules/security.md`. Threat-model first; the system prompt is not a security boundary.
 - **Cloud infra on a project nobody uses yet** (a change the gates below are about to block) → read `~/.claude/rules/prerelease.md`. If the project declares itself pre-release, mutate freely; the declaration is never inferred. Self-hosted infra is never pre-release.
-- **Fanning out across subagents** (a workflow, a multi-lens review, a migration over many files) → read `~/.claude/rules/agent-orchestration.md`. The orchestrator is the main loop; personas never invoke personas.
+- **Fanning out across subagents** (a workflow, a multi-lens review, a migration over many files, anything multi-stage that passes state between agents) → read `~/.claude/rules/agent-orchestration.md`. The orchestrator is the main loop; personas never invoke personas, and run-state lives in a file, not a context window.
 
 ## How I work
 - Be concise and direct. Lead with the answer or the action, not a preamble or a recap of what I just said.

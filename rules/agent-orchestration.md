@@ -27,6 +27,27 @@ and failure are all accountable in one place.
 - **Worktree isolation** (`isolation: "worktree"`) only when agents mutate files in parallel and would
   otherwise collide — it's real setup cost, not a default.
 
+## State is an artifact, not a transcript
+The one thing the "graphs, not loops" crowd is right about: a fleet whose only memory is its context
+window forgets. Subagents die, contexts compact, sessions get killed. Edges carry *state*, and state
+has to live somewhere you can read after the fact.
+
+- **A fan-out over more than a handful of items writes run-state to a file.** `.claude/runs/<name>.md`
+  in the project (or the `Workflow` journal, which already does this): the work list, per-item status,
+  results so far, open questions. Nodes read it and append to it. Same reason `loops.md` demands a
+  ledger — it survives compaction, resume, and hand-off, and it's what `/resume` reads.
+- **Say how it resumes before you start it.** `Workflow` → `resumeFromRunId` plus
+  `<transcriptDir>/journal.jsonl` (the longest unchanged prefix replays from cache). Anything else →
+  the run-state file, so a second pass skips what's already done. A fan-out you can't resume costs
+  full price every time it dies, and long ones do die.
+- **Gate nodes are nodes.** An irreversible step that surfaces mid-fan-out — a deploy, a DNS change,
+  a paid call — halts *that branch* and appends to the approvals queue (`NEEDS-APPROVAL.md`); the
+  other branches keep flowing. Route around it, never through it. A worker deciding on its own that
+  its irreversible step is "probably fine" is the failure this whole setup exists to prevent, and a
+  worker is exactly the wrong place to make that call — it has the least context of anyone.
+- **Read the state before you diagnose the run.** When a workflow returns something empty or strange,
+  the journal says what each agent actually returned. Check it before theorizing about why.
+
 ## Anti-patterns
 - **Personas orchestrating personas** — nesting hides cost and failure; flatten it.
 - **A barrier where a pipeline would do** — don't `parallel()` then transform then `parallel()` again
@@ -35,6 +56,8 @@ and failure are all accountable in one place.
   not an answer. Always end with a dedup/synthesis step.
 - **Silent truncation** — if you cap coverage (top-N, no-retry, sampling), *say so*; a silent cap
   reads as "covered everything" when it didn't.
+- **A long fan-out with no resume path** — thirty items deep, the session dies, and the only option
+  is to pay for all thirty again. Decide where state lands *before* you spawn.
 - **Running two skill/command routers at once** — they fight over names and routing. Compose
   individual skills, not whole competing frameworks.
 
