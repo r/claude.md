@@ -89,10 +89,15 @@ The declaration is read from the marker file or asked for once — **never infer
 environment name, and never assumed in order to unblock yourself. No marker means the normal gates.
 
 ## Auto mode — the default posture
-**Auto mode is the default.** Assume nobody is watching each step. Most sessions run hands-off —
-auto-accept edits, `/loop`, a workflow, a scheduled agent — and there, stopping to ask a question
-nobody is present to answer just stalls the work. So the confirmation gates relax **for reversible
-work only**.
+**Auto mode is the default.** Literally: `permissions.defaultMode` is `auto` in `settings.json`, so
+every session starts in the harness's classifier-driven auto mode rather than prompting per action.
+Assume nobody is watching each step. Most sessions run hands-off — auto mode, `/loop`, a workflow, a
+scheduled agent — and there, stopping to ask a question nobody is present to answer just stalls the
+work. So the confirmation gates relax **for reversible work only**.
+
+The harness's auto-mode classifier is a *floor*, not a substitute for the judgment below. It blocks
+the obviously irreversible; it does not know what this particular network's blast radius is. A
+`PreToolUse` guardrail hook still runs in every mode, and the "Never do these" list still stands.
 
 This changes exactly one thing: **who has to signal.** It is not a change to *what* is gated. Every
 item on the "Never do these" list above is as gated as it ever was — auto mode changes how you handle
