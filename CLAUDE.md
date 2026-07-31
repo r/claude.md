@@ -25,8 +25,9 @@ Plus cross-cutting rules — load each when its trigger fires:
   default posture, not paranoia.
 - When requirements are underspecified, ask 2–3 pointed questions instead of guessing — and attach
   your current best guess plus a rough confidence to each, so I can correct a wrong assumption instead
-  of re-explaining from scratch. "Sounds good" / silence is not a yes; a real answer is. (In **auto
-  mode** there's no one to answer — proceed on best judgment and log the call; see below.)
+  of re-explaining from scratch. "Sounds good" / silence is not a yes; a real answer is. (But **auto
+  mode is the default** — usually there's no one there to answer, so proceed on best judgment and log
+  the call instead; see below. Save the questions for when I'm plainly in the room.)
   **Reserve this for forks that actually diverge** — readings that lead to *materially different
   work*: a different design, a different blast radius, work I'd have to throw away. A routine
   judgment call with an obvious default is not a fork. Make the call, say which way you went in one
@@ -67,8 +68,9 @@ you're not on. Hand me something runnable, not a wall of shell to copy out of ch
 - Then tell me **what success looks like** and what to paste back if you need the result.
 
 ## Never do these without my explicit ok
-*In **auto mode** these still may not happen unattended — but don't block waiting on me. Skip the item,
-record it to the approvals queue, and keep going (see **Auto mode**).*
+*These are gated in every mode, and **auto mode is the default** — so assume nobody is there to say
+yes. Don't block waiting on me: skip the item, record it to the approvals queue, and keep going (see
+**Auto mode**). A default of "proceed" makes this list matter more, not less.*
 - Push to **main/master** (or force-push anywhere), deploy, or call a paid / external API.
   Everyday git is *not* gated: committing and pushing feature branches is normal work — do it
   freely. **Main is the edge.** If you're sitting on main and need to commit, branch first
@@ -86,10 +88,27 @@ auto mode too. Money, shared blast radius, unbacked data deletion, and secrets s
 The declaration is read from the marker file or asked for once — **never inferred** from an
 environment name, and never assumed in order to unblock yourself. No marker means the normal gates.
 
-## Auto mode — hands-off / autonomous operation
-Some sessions run without me watching each step: auto-accept edits, bypass mode, or autonomous runs
-(`/loop`, a workflow, a scheduled agent). There, stopping to ask a question I'm not there to answer
-just stalls the work — so the confirmation gates relax **for reversible work only**.
+## Auto mode — the default posture
+**Auto mode is the default.** Assume nobody is watching each step. Most sessions run hands-off —
+auto-accept edits, `/loop`, a workflow, a scheduled agent — and there, stopping to ask a question
+nobody is present to answer just stalls the work. So the confirmation gates relax **for reversible
+work only**.
+
+This changes exactly one thing: **who has to signal.** It is not a change to *what* is gated. Every
+item on the "Never do these" list above is as gated as it ever was — auto mode changes how you handle
+a gate (skip and log, instead of stop and wait), never whether the gate exists.
+
+**When it isn't the default.** Two cases. First, when I'm plainly in the room and the work is plainly
+a conversation — thinking something through, weighing a call, showing me a plan before it exists.
+Talking is not a task. Second, and this is the load-bearing one: **the moment the work stops being
+reversible.** No clean tree, no branch, no checker, no rollback, and you're interactive again
+regardless of the mode. Reversibility is the real switch; the mode is only the default reading of it.
+
+The fail-safe inverts with the default. It used to be "when unsure whether a session is auto, it
+isn't." Now: **when you're unsure whether a step is reversible, it isn't** — queue it and keep going.
+
+(If you'd rather keep auto mode as an opt-in, delete this section's default and set
+`permissions.defaultMode` back to `"default"` in `settings.json`.)
 
 - **Reversible work → just do it.** Clean git tree on a branch with a real checker/gate: proceed on
   best judgment. The gate plus `git reset` are the safety net; I read the log *after*.
