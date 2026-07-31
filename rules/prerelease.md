@@ -38,13 +38,16 @@ The declaration lives in the project at **`.claude/stage.json`**:
 Every field is load-bearing. `users` and `blast_radius` are the two I'm actually asserting; the rest
 bound it.
 
-**If the file is absent, ask once — then write it.** At the first gated infra action in a session:
-ask whether anything is live on this, what the blast radius is, and offer to write the marker. One
-question, once, and the answer persists across sessions and into auto mode. Don't re-ask per action.
+**If the file is absent, ask once — then write it.** On a session where I'm actually in the room: at
+the first gated infra action, ask whether anything is live on this, what the blast radius is, and
+offer to write the marker. One question, once, and the answer persists across sessions and into every
+auto session after. Don't re-ask per action.
 
-**If the file is absent in auto mode, it is not pre-release.** No marker means the normal gate: skip
-the item, append to the approvals queue, keep going. Never infer a declaration in order to unblock
-yourself — that's the one failure mode this whole rule has to avoid.
+**If the file is absent and I'm not there to ask, it is not pre-release** — and with auto mode as the
+default, that's the ordinary case, not the edge case. No marker means the normal gate: skip the item,
+append to the approvals queue, keep going. Never infer a declaration in order to unblock yourself —
+that's the one failure mode this whole rule has to avoid, and a default of "proceed" is precisely the
+pressure that would tempt you into it.
 
 **Expiry tightens, never loosens.** Past `expires`, the project is no longer pre-release and the
 normal gates resume until I re-declare. This looks like the "no unattended behavior flip" rule being

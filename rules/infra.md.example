@@ -21,6 +21,13 @@ Keep a table so the agent (and you) always know what's what. Example shape:
 
 This is the spine. For any change to live infrastructure:
 
+**Auto mode is the default everywhere else; it stops at this heading.** Nothing below relaxes because
+nobody's watching — real people depend on this infrastructure, the "checker" is production, and
+rollback isn't `git reset`. A hands-off session does not get to apply infra changes on its own: it
+prepares them, and the applying step goes to the approvals queue (`NEEDS-APPROVAL.md`) with its backup
+and rollback already written. Self-hosted infra is also never pre-release, so that carve-out can't
+reach here either.
+
 1. **Discover current state first, and say it back.** For firewall/routing, analyze the actual
    traffic flows before proposing anything. Ground the change in what's really there, not what you
    assume.
