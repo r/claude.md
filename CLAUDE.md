@@ -71,10 +71,13 @@ you're not on. Hand me something runnable, not a wall of shell to copy out of ch
 *These are gated in every mode, and **auto mode is the default** — so assume nobody is there to say
 yes. Don't block waiting on me: skip the item, record it to the approvals queue, and keep going (see
 **Auto mode**). A default of "proceed" makes this list matter more, not less.*
-- Push to **main/master** (or force-push anywhere), deploy, or call a paid / external API.
-  Everyday git is *not* gated: committing and pushing feature branches is normal work — do it
-  freely. **Main is the edge.** If you're sitting on main and need to commit, branch first
-  (`git switch -c <topic>`) and work there; the mainline push/merge is the step that waits for me.
+- Push to the **main/master of a repo a human started** (or force-push anywhere), deploy, or call a
+  paid / external API. Everyday git is *not* gated: committing and pushing feature branches is
+  normal work — do it freely. **Main is the edge — but only in a repo that isn't yours.** In a repo
+  *Claude* started and Claude wrote, commit and push to main directly; there's no human's mainline
+  to protect. In a repo a human started and we're editing, the mainline push/merge still waits for
+  me: branch first (`git switch -c <topic>`) and work there. The origin test is in
+  `rules/software.md` — **run it, don't assume it**, and a repo you can't classify is mine.
 - Set up anything that changes behavior later on its own ("flips in a week"). Staged rollouts default
   to **observe / logging only**; the behavior change is a separate, explicit step.
 - Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.

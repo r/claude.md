@@ -17,7 +17,9 @@ Each rule has:
     all:    list of regexes that must ALL match for the rule to fire
     guard:  (optional) extra engine-evaluated condition; currently only
             "default-branch-push" — fires only when a `git push` lands on
-            main/master (resolves the current branch for bare/HEAD pushes)
+            main/master (resolves the current branch for bare/HEAD pushes) AND
+            the repo is one a human started (Claude-origin repos are exempt;
+            see _repo_origin in guardrail.py)
     hint:   (optional) replaces the generic ask/deny boilerplate — use it to
             tell the agent how to KEEP WORKING (e.g. branch off), not just stop
 
@@ -114,18 +116,26 @@ RULES: dict[str, list[dict[str, Any]]] = {
         # current branch), --all/--mirror — plus force-pushes (rule above) and
         # the unattended-scheduling rules below. Anchored to the git SUBCOMMAND
         # so `git log --grep push` doesn't trip.
+        #
+        # The guard also asks WHOSE mainline it is. What's being protected is a
+        # human's history; a repo Claude started and Claude wrote has none, so
+        # the engine lets that push through (origin test + `.claude/origin.json`
+        # in rules/software.md). Unclassifiable => human => still asks. Note the
+        # force-push rule above carries no guard, so it stays gated everywhere.
         {
             "action": "ask",
-            "why": "this push lands on main/master — the mainline is the outward edge (feature-branch pushes don't ask)",
+            "why": "this push lands on the main/master of a repo a human started — that mainline is the outward edge (feature-branch pushes, and Claude-origin repos, don't ask)",
             "all": [r"^git\s+(?:-C\s+\S+\s+|-c\s+\S+\s+)*push\b"],
             "guard": "default-branch-push",
             "hint": (
-                "This push lands on main/master, which needs the user's explicit ok. Don't "
-                "stall the work: keep going on a feature branch instead — `git switch -c "
-                "<topic>` (move your commits there if you're sitting on main), push THAT "
-                "branch (feature-branch pushes are free), and append the staged mainline "
-                "push/merge to NEEDS-APPROVAL.md per the auto-mode skip-and-log rule. "
-                "Only push main directly when the user has said yes in this session."
+                "This push lands on the main/master of a repo a human started, which needs "
+                "the user's explicit ok. Don't stall the work: keep going on a feature branch "
+                "instead — `git switch -c <topic>` (move your commits there if you're "
+                "sitting on main), push THAT branch (feature-branch pushes are free), and "
+                "append the staged mainline push/merge to NEEDS-APPROVAL.md per the "
+                "auto-mode skip-and-log rule. Only push main directly when the user has said "
+                "yes in this session — or when this is a Claude-origin repo, which is "
+                "declared in .claude/origin.json, never assumed."
             ),
         },
         {

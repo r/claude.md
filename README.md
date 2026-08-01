@@ -157,6 +157,17 @@ mainline push in the approvals file — instead of just stopping. That promotes 
 the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a
 safety net for accidents and overreach, explicitly *not* a security boundary.
 
+That same guard also asks **whose** mainline it is, because the thing being protected is a *human's*
+history — your bisect, your review. A repo Claude created and Claude wrote has none of that, so the
+gate there was pure friction: a scratch project paying a branch-and-approvals-queue detour to defend
+a mainline no human ever touched. Origin is decided in the engine, not in prose (prose alone would
+leave the hook asking anyway), by a trailer census: a history where *every* commit carries
+`Co-Authored-By: Claude` is Claude's own, and one human commit — or a merge commit, an empty history,
+a shallow clone, an unreadable repo — makes it yours. It fails closed by construction, and
+`.claude/origin.json` overrides the census in both directions for the case it gets wrong, read never
+inferred like every other marker here. Force-push keeps no origin guard and stays gated everywhere:
+origin lifts "whose history is this," not "who feels it."
+
 **A gate you always say yes to is not a gate — measure the accept rate, not the prompt count.** The
 failure mode of a careful setup is not that it blocks too little; it's that it asks so often you stop
 reading and start blanket-accepting, which quietly disarms every gate at once. That is measurable, so

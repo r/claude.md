@@ -146,6 +146,77 @@ def test_mainline_push_hint_survives_to_emit_reason() -> None:
     assert "feature branch" in hit[2] and "NEEDS-APPROVAL" in hit[2]
 
 
+def check_origin_case(command: str, origin: str | None, expected: str | None) -> None:
+    hit = guardrail.classify(
+        "Bash", {"command": command}, RULES, lambda: "main", lambda _seg: origin
+    )
+    got = hit[0] if hit else None
+    assert got == expected, (
+        f"{command!r} in a {origin!r}-origin repo -> {got!r}, expected {expected!r}"
+    )
+
+
+def test_origin_aware_mainline_push() -> None:
+    """Whose mainline is it? Claude's own repo is exempt; everything else asks."""
+    for command in ("git push", "git push origin main", "git push origin HEAD:master"):
+        check_origin_case(command, "claude", None)
+        check_origin_case(command, "human", "ask")
+        check_origin_case(command, None, "ask")  # unclassifiable => human
+    # Force-push carries no origin guard: gated even in a Claude-origin repo.
+    check_origin_case("git push --force origin main", "claude", "ask")
+
+
+def test_push_repo_dir_reads_the_target_not_the_cwd() -> None:
+    assert guardrail.push_repo_dir("git -C /srv/app push origin main", "/home/raffi") == "/srv/app"
+    assert guardrail.push_repo_dir("git push origin main", "/home/raffi") == "/home/raffi"
+    # A -C AFTER the subcommand isn't git's repo selector; don't be fooled by it.
+    assert guardrail.push_repo_dir("git push -C /nope origin main", "/home/raffi") == "/home/raffi"
+
+
+def test_repo_origin_against_real_repos() -> None:
+    """The census and the marker, run against actual git histories.
+
+    The unit tests above inject the origin, so they say nothing about whether
+    the trailer census can actually read one. It is easy to get wrong — the
+    obvious `--format=…%(trailers:…valueonly)` emits a trailing newline per
+    commit, so every Claude commit also yields a BLANK line and a whole-Claude
+    history scores as entirely human. Assert against real commits.
+    """
+    import subprocess as _sp
+    import tempfile
+
+    def repo(path: str, *commits: str) -> str:
+        _sp.run(["git", "init", "-q", "-b", "main", path], check=True)
+        for name in ("user.email", "user.name"):
+            _sp.run(["git", "-C", path, "config", name, "test"], check=True)
+        for message in commits:
+            _sp.run(["git", "-C", path, "commit", "-q", "--allow-empty", "-m", message], check=True)
+        return path
+
+    trailer = "\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+    with tempfile.TemporaryDirectory() as tmp:
+        all_claude = repo(f"{tmp}/agent", "one" + trailer, "two" + trailer)
+        assert guardrail._repo_origin(all_claude) == "claude"
+
+        mixed = repo(f"{tmp}/mine", "one" + trailer, "two by hand")
+        assert guardrail._repo_origin(mixed) == "human", "one human commit makes it the user's"
+
+        # The marker overrides the census, in BOTH directions.
+        marker = pathlib.Path(mixed) / ".claude"
+        marker.mkdir()
+        (marker / "origin.json").write_text('{"origin": "claude"}')
+        assert guardrail._repo_origin(mixed) == "claude"
+        (marker / "origin.json").write_text('{"origin": "human"}')
+        assert guardrail._repo_origin(all_claude) == "claude"  # marker is per-repo
+        assert guardrail._repo_origin(mixed) == "human"
+        (marker / "origin.json").write_text("{ not json")
+        assert guardrail._repo_origin(mixed) == "human", "unreadable marker falls back"
+
+        # Fail-closed paths: no repo at all, and a repo with no commits yet.
+        assert guardrail._repo_origin(tmp) is None
+        assert guardrail._repo_origin(repo(f"{tmp}/empty")) is None
+
+
 def test_end_to_end_under_system_python() -> None:
     """Run the hook the way the HARNESS runs it: as a subprocess, over stdin.
 
@@ -201,8 +272,11 @@ if __name__ == "__main__":
     for _cmd, _branch, _exp in BRANCH_CASES:
         check_branch_case(_cmd, _branch, _exp)
     test_mainline_push_hint_survives_to_emit_reason()
+    test_origin_aware_mainline_push()
+    test_push_repo_dir_reads_the_target_not_the_cwd()
+    test_repo_origin_against_real_repos()
     test_end_to_end_under_system_python()
     print(
-        f"ok — {len(CASES) + len(BRANCH_CASES) + 2} guardrail cases passed "
+        f"ok — {len(CASES) + len(BRANCH_CASES) + 5} guardrail cases passed "
         f"(python {sys.version.split()[0]})"
     )

@@ -43,10 +43,30 @@ Rule = Dict[str, Any]
 # TypeError at import, the hook crashes, fail-open swallows it, and the guardrail
 # is silently gone. Minimum supported Python here is 3.9; keep it that way.
 BranchFn = Callable[[], Optional[str]]
+# Takes the command segment (so a `git -C <dir> push` is judged against the repo
+# it actually pushes, not the session cwd) and returns "claude" | "human" | None.
+OriginFn = Callable[[str], Optional[str]]
+ORIGIN_MARKER = (".claude", "origin.json")
 
 
 def _unknown_branch() -> str | None:
     return None
+
+
+def _unknown_origin(_segment: str) -> str | None:
+    """Default: origin unknown => human => the mainline gate stands."""
+    return None
+
+
+def push_repo_dir(segment: str, cwd: str) -> str:
+    """The repo a `git … push` acts on: its -C directory, else the session cwd."""
+    tokens = segment.split()
+    if "push" in tokens:
+        tokens = tokens[: tokens.index("push")]
+    for i, token in enumerate(tokens[:-1]):
+        if token == "-C":
+            return tokens[i + 1]
+    return cwd or "."
 
 
 def push_targets_default(segment: str, branch_of: BranchFn) -> bool:
@@ -94,15 +114,22 @@ def load_rules() -> dict[str, list[Rule]]:
 
 
 def _first_hit(
-    rules: list[Rule], text: str, branch_of: BranchFn = _unknown_branch
+    rules: list[Rule],
+    text: str,
+    branch_of: BranchFn = _unknown_branch,
+    origin_of: OriginFn = _unknown_origin,
 ) -> tuple[str, str, str | None] | None:
     for rule in rules:
         if not all(re.search(pattern, text) for pattern in rule["all"]):
             continue
-        if rule.get("guard") == "default-branch-push" and not push_targets_default(
-            text, branch_of
-        ):
-            continue
+        if rule.get("guard") == "default-branch-push":
+            if not push_targets_default(text, branch_of):
+                continue
+            # The gate protects a HUMAN's mainline. A repo Claude started and
+            # Claude wrote has none, so pushing its main is ordinary work.
+            # Anything we can't classify reads as human — see _repo_origin.
+            if origin_of(text) == "claude":
+                continue
         return rule["action"], rule["why"], rule.get("hint")
     return None
 
@@ -112,17 +139,21 @@ def classify(
     tool_input: Rule,
     rules: dict[str, list[Rule]],
     branch_of: BranchFn = _unknown_branch,
+    origin_of: OriginFn = _unknown_origin,
 ) -> tuple[str, str, str | None] | None:
     """Return (action, why, hint) for the first matching rule, else None.
 
-    Pure given branch_of — the only I/O is the injected current-branch lookup,
-    which defaults to "unknown" (conservative) so tests stay deterministic.
+    Pure given branch_of/origin_of — the only I/O is those injected lookups,
+    which both default to "unknown" (conservative) so tests stay deterministic.
     """
     if tool == "Bash":
         command = tool_input.get("command", "") or ""
         for segment in SEGMENT.split(command):
             hit = _first_hit(
-                rules.get("bash", []), WRAPPER.sub("", segment.strip()), branch_of
+                rules.get("bash", []),
+                WRAPPER.sub("", segment.strip()),
+                branch_of,
+                origin_of,
             )
             if hit:
                 return hit
@@ -186,13 +217,78 @@ def _git_branch_resolver(cwd: str) -> BranchFn:
     return resolve
 
 
+def _repo_origin(directory: str) -> str | None:
+    """"claude" if this repo is Claude's own, "human"/None if it's the user's.
+
+    Declared marker first (`.claude/origin.json` at the repo root), then the
+    trailer census: a history where EVERY commit carries `Co-Authored-By:
+    Claude` is a repo Claude started and Claude wrote. Merge commits carry no
+    trailer and so read as human — the fail-closed direction, which the marker
+    exists to override. Anything unreadable (no repo, empty history, git error)
+    returns None and the mainline gate stands.
+    """
+    import subprocess
+
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(
+                ["git", "-C", directory] + list(args),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            return None
+        return out.stdout if out.returncode == 0 else None
+
+    root = git("rev-parse", "--show-toplevel")
+    if not root:
+        return None
+    try:
+        import os
+
+        with open(os.path.join(root.strip(), *ORIGIN_MARKER)) as fh:
+            declared = json.load(fh).get("origin")
+        if declared in {"claude", "human"}:
+            return declared
+    except Exception:
+        pass  # no marker, or an unreadable one: fall through to the census
+    log = git("log", "--format=%H %(trailers:key=Co-Authored-By,valueonly,separator=%x2C)")
+    if log is None:
+        return None
+    lines = [line for line in log.splitlines() if line.strip()]
+    if not lines:
+        return None  # no history to judge — fail closed
+    return "claude" if all("Claude" in line for line in lines) else "human"
+
+
+def _git_origin_resolver(cwd: str) -> OriginFn:
+    """Lazy, memoized per-repo origin lookup, keyed by the push's target dir.
+
+    Like the branch resolver, only invoked when a rule's guard needs it — i.e.
+    a push that already resolved to main/master — so ordinary commands never
+    pay the two subprocesses.
+    """
+    cache: dict[str, str | None] = {}
+
+    def resolve(segment: str) -> str | None:
+        directory = push_repo_dir(segment, cwd)
+        if directory not in cache:
+            cache[directory] = _repo_origin(directory)
+        return cache[directory]
+
+    return resolve
+
+
 def main() -> None:
     data = json.load(sys.stdin)
+    cwd = data.get("cwd") or "."
     hit = classify(
         data.get("tool_name", ""),
         data.get("tool_input") or {},
         load_rules(),
-        _git_branch_resolver(data.get("cwd") or "."),
+        _git_branch_resolver(cwd),
+        _git_origin_resolver(cwd),
     )
     if hit:
         emit(*hit)

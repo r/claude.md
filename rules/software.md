@@ -107,9 +107,52 @@ Instrument as you build, the way you test — not bolted on after an incident.
 4. Add or update tests **and docs**; run the quality gate. Don't re-run an unchanged gate hoping for a
    different result — the same command on unchanged code adds no information.
 5. Summarize what changed, how to test it, what's still risky, and — briefly — what you deliberately
-   **didn't** touch (scope evidence). Commit when the gate is green — code, tests, and docs together,
-   on a branch (branch off first if you're on main). Pushing the feature branch is fine too; anything
-   that lands on main/master waits for an explicit ok.
+   **didn't** touch (scope evidence). Commit when the gate is green — code, tests, and docs together.
+   Where that lands depends on who started the repo — see below.
+
+## Whose repo is it? (the mainline gate)
+
+The main-push gate in `CLAUDE.md` exists to protect *a human's* mainline: my history, my bisect, my
+review. A repo that Claude created and Claude wrote has no such thing to protect, so the gate there
+is friction with nothing on the other side of it. Which repo you're in decides the whole shape of
+the work:
+
+- **Claude-origin repo** — commit and push **straight to main**. No branch, no approvals queue, no
+  asking. Work on main the way you'd work on a scratch branch: the gate plus `git revert` is the
+  safety net.
+- **Human-origin repo** — unchanged from before. Branch off first (`git switch -c <topic>`),
+  commit and push the *branch* freely, and the merge/push to main waits for an explicit ok (in auto
+  mode: skip it, append to `NEEDS-APPROVAL.md` with the exact merge command staged, keep going).
+
+**The origin test — run it, don't assume it.** Once per repo, before the first push:
+
+```bash
+git -C <repo> log --format='%H %(trailers:key=Co-Authored-By,valueonly,separator=%x2C)' | grep -cv Claude
+```
+
+Zero — every commit in history, root included, carries the `Co-Authored-By: Claude` trailer — means
+Claude-origin. **One or more and it's mine**, no matter how agent-written the recent work looks.
+(Keep the `separator=`; without it git appends a newline per trailer and every blank line scores as
+a human commit. Merge commits carry no trailer and so count as mine too — that's the fail-closed
+direction, and the marker below is the escape hatch.) The test fails closed by construction: an
+empty repo, a shallow clone, a history you can't read, or a repo you never ran it in all count as
+mine.
+
+**A marker overrides the test** — for the case the history gets wrong, a repo Claude started that I
+later hand-committed into. `.claude/origin.json` in the repo root, same shape as `stage.json`:
+
+```json
+{ "origin": "claude", "declared": "2026-08-01", "note": "scaffolded and written by Claude; my commits are typo fixes" }
+```
+
+`"origin": "claude"` lifts the gate; `"origin": "human"` reimposes it even on a clean history (use
+it for anything I intend to hand off or publish). Like every marker in this setup the declaration is
+**read, never inferred** — a repo that merely *looks* agent-generated, or a `claude-`prefixed name,
+declares nothing. If I'm in the room and the answer is unclear, ask once and write the marker.
+
+**What stays gated in a Claude-origin repo:** force-push anywhere, a push that *triggers* something
+outward (a deploy, a package publish, a release workflow, Pages), and any repo with another
+collaborator or a downstream consumer. Origin lifts "whose history is this," not "who feels it."
 
 ## Quality gate (unless the repo defines its own)
 ```bash
