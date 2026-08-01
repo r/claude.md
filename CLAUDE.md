@@ -73,13 +73,10 @@ yes. Don't block waiting on me: skip the item, record it to the approvals queue,
 **Auto mode**). A default of "proceed" makes this list matter more, not less.*
 - Push to the **main/master of a repo a human started** (or force-push anywhere), deploy, or call a
   paid / external API. Everyday git is *not* gated: committing and pushing feature branches is
-  normal work — do it freely. **Main is the edge — but only in a repo that isn't yours.** In a repo
-  *Claude* started and Claude wrote, commit and push to main directly; there's no human's mainline
-  to protect. In a repo a human started and we're editing, the mainline push/merge still waits for
-  me: branch first (`git switch -c <topic>`) and work there. Which is which is the repo's **root
-  commit**, read with `~/.claude/bin/repo-origin` — **run it, don't assume it**, and a repo you
-  can't classify is mine. Overrides live in `~/.claude/repo-origins.json`, never in the repo
-  (`rules/software.md`).
+  normal work — do it freely. **Main is the edge, but only where a human's history is.** A repo
+  *Claude* started has none, so push its main directly; anywhere else branch first (`git switch -c
+  <topic>`) and the mainline merge waits for me. Which is which is the **root commit**:
+  `~/.claude/bin/repo-origin` reads it, and one you can't classify is mine (`rules/software.md`).
 - Set up anything that changes behavior later on its own ("flips in a week"). Staged rollouts default
   to **observe / logging only**; the behavior change is a separate, explicit step.
 - Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.
@@ -98,15 +95,13 @@ environment name, and never assumed in order to unblock yourself. No marker mean
 every session starts in the harness's classifier-driven auto mode rather than prompting per action.
 Assume nobody is watching each step. Most sessions run hands-off — auto mode, `/loop`, a workflow, a
 scheduled agent — and there, stopping to ask a question nobody is present to answer just stalls the
-work. So the confirmation gates relax **for reversible work only**.
+work. Read carefully what that changes: **who has to signal, not what is gated.** Every item on the
+"Never do these" list is as gated as it ever was — auto mode changes how you *handle* a gate (skip
+and log, instead of stop and wait), never whether the gate exists.
 
 The harness's auto-mode classifier is a *floor*, not a substitute for the judgment below. It blocks
 the obviously irreversible; it does not know what this particular network's blast radius is. A
 `PreToolUse` guardrail hook still runs in every mode, and the "Never do these" list still stands.
-
-This changes exactly one thing: **who has to signal.** It is not a change to *what* is gated. Every
-item on the "Never do these" list above is as gated as it ever was — auto mode changes how you handle
-a gate (skip and log, instead of stop and wait), never whether the gate exists.
 
 **When it isn't the default.** Two cases. First, when I'm plainly in the room and the work is plainly
 a conversation — thinking something through, weighing a call, showing me a plan before it exists.
@@ -120,8 +115,10 @@ isn't." Now: **when you're unsure whether a step is reversible, it isn't** — q
 (If you'd rather keep auto mode as an opt-in, delete this section's default and set
 `permissions.defaultMode` back to `"default"` in `settings.json`.)
 
-- **Reversible work → just do it.** Clean git tree on a branch with a real checker/gate: proceed on
-  best judgment. The gate plus `git reset` are the safety net; I read the log *after*.
+- **Reversible work → just do it.** Clean git tree with a real checker/gate: proceed on best
+  judgment. The gate plus `git reset` are the safety net; I read the log *after*. In a repo of mine,
+  branch off before the first commit so only the mainline merge queues; in one Claude started, main
+  is already free.
 - **Irreversible / infra / paid / outward-facing → skip-and-log, never block.** Skip the item, append
   it to an approvals queue (`NEEDS-APPROVAL.md` in the repo, or `~/.claude/needs-approval.md`
   outside one), and keep making progress on everything else. No answer means *skip*, not *go*.

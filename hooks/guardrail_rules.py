@@ -130,13 +130,11 @@ RULES: dict[str, list[dict[str, Any]]] = {
             "guard": "default-branch-push",
             "hint": (
                 "This push lands on the main/master of a repo a human started, which needs "
-                "the user's explicit ok. Don't stall the work: keep going on a feature branch "
-                "instead — `git switch -c <topic>` (move your commits there if you're "
-                "sitting on main), push THAT branch (feature-branch pushes are free), and "
-                "append the staged mainline push/merge to NEEDS-APPROVAL.md per the "
-                "auto-mode skip-and-log rule. Only push main directly when the user has said "
-                "yes in this session — or in a repo Claude started, which is decided by "
-                "the root commit and ~/.claude/bin/repo-origin, never assumed."
+                "the user's explicit ok. Don't stall: branch instead — `git switch -c <topic>` "
+                "(move your commits over if you're sitting on main), push THAT branch "
+                "(free), and stage the mainline merge in NEEDS-APPROVAL.md. Push main "
+                "directly only when the user has said yes this session, or in a repo Claude "
+                "started (root commit / repo-origin, never assumed)."
             ),
         },
         {

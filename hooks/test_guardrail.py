@@ -145,7 +145,10 @@ def test_branch_aware_push() -> None:
 def test_mainline_push_hint_survives_to_emit_reason() -> None:
     hit = guardrail.classify("Bash", {"command": "git push origin main"}, RULES)
     assert hit is not None and hit[2] is not None
-    assert "feature branch" in hit[2] and "NEEDS-APPROVAL" in hit[2]
+    # Assert the two ACTIONABLE things, not the prose around them: how to keep
+    # working, and where to park the blocked step. Wording gets tightened; these
+    # are what make the hint worth carrying instead of the generic boilerplate.
+    assert "git switch -c" in hit[2] and "NEEDS-APPROVAL" in hit[2]
 
 
 def check_origin_case(command: str, origin: str | None, expected: str | None) -> None:
