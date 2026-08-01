@@ -181,7 +181,9 @@ TRAILER = "\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 def make_repo(path: str, *commits: str) -> str:
     import subprocess as _sp
 
-    _sp.run(["git", "init", "-q", "-b", "main", path], check=True)
+    # No `git init -b <branch>`: that flag is git 2.28+, and the fleet floor is
+    # older. These tests care about root commits, not about the branch name.
+    _sp.run(["git", "init", "-q", path], check=True)
     for name, value in (("user.email", "t@example.com"), ("user.name", "t")):
         _sp.run(["git", "-C", path, "config", name, value], check=True)
     for message in commits:
