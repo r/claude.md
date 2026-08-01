@@ -118,10 +118,11 @@ RULES: dict[str, list[dict[str, Any]]] = {
         # so `git log --grep push` doesn't trip.
         #
         # The guard also asks WHOSE mainline it is. What's being protected is a
-        # human's history; a repo Claude started and Claude wrote has none, so
-        # the engine lets that push through (origin test + `.claude/origin.json`
-        # in rules/software.md). Unclassifiable => human => still asks. Note the
-        # force-push rule above carries no guard, so it stays gated everywhere.
+        # human's history; a repo Claude started has none, so the engine lets
+        # that push through. Origin is read off the ROOT COMMIT, with overrides
+        # in ~/.claude/repo-origins.json — nothing is written into the repo
+        # itself (see rules/software.md). Unclassifiable => human => still asks.
+        # The force-push rule above carries no guard: gated everywhere.
         {
             "action": "ask",
             "why": "this push lands on the main/master of a repo a human started — that mainline is the outward edge (feature-branch pushes, and Claude-origin repos, don't ask)",
@@ -134,8 +135,8 @@ RULES: dict[str, list[dict[str, Any]]] = {
                 "sitting on main), push THAT branch (feature-branch pushes are free), and "
                 "append the staged mainline push/merge to NEEDS-APPROVAL.md per the "
                 "auto-mode skip-and-log rule. Only push main directly when the user has said "
-                "yes in this session — or when this is a Claude-origin repo, which is "
-                "declared in .claude/origin.json, never assumed."
+                "yes in this session — or in a repo Claude started, which is decided by "
+                "the root commit and ~/.claude/bin/repo-origin, never assumed."
             ),
         },
         {

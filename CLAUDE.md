@@ -76,8 +76,10 @@ yes. Don't block waiting on me: skip the item, record it to the approvals queue,
   normal work — do it freely. **Main is the edge — but only in a repo that isn't yours.** In a repo
   *Claude* started and Claude wrote, commit and push to main directly; there's no human's mainline
   to protect. In a repo a human started and we're editing, the mainline push/merge still waits for
-  me: branch first (`git switch -c <topic>`) and work there. The origin test is in
-  `rules/software.md` — **run it, don't assume it**, and a repo you can't classify is mine.
+  me: branch first (`git switch -c <topic>`) and work there. Which is which is the repo's **root
+  commit**, read with `~/.claude/bin/repo-origin` — **run it, don't assume it**, and a repo you
+  can't classify is mine. Overrides live in `~/.claude/repo-origins.json`, never in the repo
+  (`rules/software.md`).
 - Set up anything that changes behavior later on its own ("flips in a week"). Staged rollouts default
   to **observe / logging only**; the behavior change is a separate, explicit step.
 - Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.

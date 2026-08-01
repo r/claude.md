@@ -78,8 +78,9 @@ details with yours, or delete it. Keep the shape: a short house style plus a har
 - **The guardrail:** in a scratch repo on `main` with at least one commit *you* authored, try
   `git push` — it should *ask* (pushing a human's mainline is the agency gate) and tell the agent to
   branch off instead. Then `git switch -c test` and note that `git commit` and a branch push sail
-  through: everyday git is deliberately free. If the repo's whole history is Claude-authored the
-  push won't ask at all — that's the origin exemption in `rules/software.md`, not a broken gate.
+  through: everyday git is deliberately free. If the repo's ROOT commit is Claude's, the push won't
+  ask at all — that's the origin exemption in `rules/software.md`, not a broken gate. `bin/repo-origin`
+  says which way any repo reads, and records an override when the root commit gets it wrong.
 - **A loop (software only):** `/improve-loop` against a measurable target sets up a checker-first,
   keep-or-rollback loop on a throwaway branch. Read `rules/loops.md` first.
 

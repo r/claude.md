@@ -4,6 +4,8 @@ or under pytest. Guards against regressions in guardrail_rules.py + the engine."
 
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import sys
 
@@ -167,54 +169,140 @@ def test_origin_aware_mainline_push() -> None:
 
 
 def test_push_repo_dir_reads_the_target_not_the_cwd() -> None:
-    assert guardrail.push_repo_dir("git -C /srv/app push origin main", "/home/raffi") == "/srv/app"
-    assert guardrail.push_repo_dir("git push origin main", "/home/raffi") == "/home/raffi"
+    assert guardrail.push_repo_dir("git -C /srv/app push origin main", "/srv/cwd") == "/srv/app"
+    assert guardrail.push_repo_dir("git push origin main", "/srv/cwd") == "/srv/cwd"
     # A -C AFTER the subcommand isn't git's repo selector; don't be fooled by it.
-    assert guardrail.push_repo_dir("git push -C /nope origin main", "/home/raffi") == "/home/raffi"
+    assert guardrail.push_repo_dir("git push -C /nope origin main", "/srv/cwd") == "/srv/cwd"
+
+
+TRAILER = "\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
+
+
+def make_repo(path: str, *commits: str) -> str:
+    import subprocess as _sp
+
+    _sp.run(["git", "init", "-q", "-b", "main", path], check=True)
+    for name, value in (("user.email", "t@example.com"), ("user.name", "t")):
+        _sp.run(["git", "-C", path, "config", name, value], check=True)
+    for message in commits:
+        _sp.run(
+            ["git", "-C", path, "commit", "-q", "--allow-empty", "-m", message], check=True
+        )
+    return path
 
 
 def test_repo_origin_against_real_repos() -> None:
-    """The census and the marker, run against actual git histories.
+    """Who STARTED the repo, read off real git histories.
 
     The unit tests above inject the origin, so they say nothing about whether
-    the trailer census can actually read one. It is easy to get wrong — the
-    obvious `--format=…%(trailers:…valueonly)` emits a trailing newline per
-    commit, so every Claude commit also yields a BLANK line and a whole-Claude
-    history scores as entirely human. Assert against real commits.
+    the root-commit read works at all. It is easy to get subtly wrong — the
+    obvious `--format=…%(trailers:…valueonly)` appends a newline per commit, so
+    a Claude commit also emits a BLANK line and naive line-counting scores a
+    whole-Claude history as entirely human. Assert against real commits.
+
+    Note what is deliberately NOT tested, because it is not the rule: later
+    commits. A repo Claude scaffolded stays Claude's after a person edits it —
+    the gate protects a human's mainline, and this repo never had one.
     """
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        os.environ[guardrail.ORIGIN_DB_ENV] = f"{tmp}/overlay.json"  # never the real one
+        try:
+            agent = make_repo(f"{tmp}/agent", "scaffold" + TRAILER, "more" + TRAILER)
+            assert guardrail._repo_origin(agent) == "claude"
+
+            # A human commit ON TOP does not change who started it.
+            import subprocess as _sp
+
+            _sp.run(
+                ["git", "-C", agent, "commit", "-q", "--allow-empty", "-m", "by hand"],
+                check=True,
+            )
+            assert guardrail._repo_origin(agent) == "claude", "root commit decides, not the tip"
+
+            # A repo a person started stays theirs however much Claude writes in it.
+            mine = make_repo(f"{tmp}/mine", "initial", "claude wrote this" + TRAILER)
+            assert guardrail._repo_origin(mine) == "human"
+
+            # Fail-closed paths: no repo at all, and a repo with no commits yet.
+            assert guardrail._repo_origin(f"{tmp}/nope") is None
+            assert guardrail._repo_origin(make_repo(f"{tmp}/empty")) is None
+        finally:
+            del os.environ[guardrail.ORIGIN_DB_ENV]
+
+
+def test_overlay_overrides_the_root_commit_both_ways() -> None:
+    """The override lives OUTSIDE the repo, keyed by root SHA — so it survives a
+    clone to a new path, which a committed marker file would too but only by
+    riding along in the tree we are trying to keep clean."""
     import subprocess as _sp
     import tempfile
 
-    def repo(path: str, *commits: str) -> str:
-        _sp.run(["git", "init", "-q", "-b", "main", path], check=True)
-        for name in ("user.email", "user.name"):
-            _sp.run(["git", "-C", path, "config", name, "test"], check=True)
-        for message in commits:
-            _sp.run(["git", "-C", path, "commit", "-q", "--allow-empty", "-m", message], check=True)
-        return path
-
-    trailer = "\n\nCo-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
     with tempfile.TemporaryDirectory() as tmp:
-        all_claude = repo(f"{tmp}/agent", "one" + trailer, "two" + trailer)
-        assert guardrail._repo_origin(all_claude) == "claude"
+        overlay = f"{tmp}/overlay.json"
+        os.environ[guardrail.ORIGIN_DB_ENV] = overlay
+        try:
+            agent = make_repo(f"{tmp}/agent", "scaffold" + TRAILER)
+            mine = make_repo(f"{tmp}/mine", "initial")
+            root_of = lambda p: _sp.run(  # noqa: E731
+                ["git", "-C", p, "rev-list", "--max-parents=0", "HEAD"],
+                capture_output=True, text=True, check=True,
+            ).stdout.split()[-1]
 
-        mixed = repo(f"{tmp}/mine", "one" + trailer, "two by hand")
-        assert guardrail._repo_origin(mixed) == "human", "one human commit makes it the user's"
+            pathlib.Path(overlay).write_text(json.dumps({"repos": {
+                root_of(agent): {"origin": "human", "note": "handing this one off"},
+                root_of(mine): {"origin": "claude"},
+            }}))
+            assert guardrail._repo_origin(agent) == "human", "override re-imposes the gate"
+            assert guardrail._repo_origin(mine) == "claude", "override lifts it"
 
-        # The marker overrides the census, in BOTH directions.
-        marker = pathlib.Path(mixed) / ".claude"
-        marker.mkdir()
-        (marker / "origin.json").write_text('{"origin": "claude"}')
-        assert guardrail._repo_origin(mixed) == "claude"
-        (marker / "origin.json").write_text('{"origin": "human"}')
-        assert guardrail._repo_origin(all_claude) == "claude"  # marker is per-repo
-        assert guardrail._repo_origin(mixed) == "human"
-        (marker / "origin.json").write_text("{ not json")
-        assert guardrail._repo_origin(mixed) == "human", "unreadable marker falls back"
+            # Follows a clone: same root SHA, different path, no file in the tree.
+            clone = f"{tmp}/cloned"
+            _sp.run(["git", "clone", "-q", mine, clone], check=True)
+            assert guardrail._repo_origin(clone) == "claude"
+            assert not (pathlib.Path(clone) / ".claude").exists(), "nothing written into the repo"
 
-        # Fail-closed paths: no repo at all, and a repo with no commits yet.
-        assert guardrail._repo_origin(tmp) is None
-        assert guardrail._repo_origin(repo(f"{tmp}/empty")) is None
+            # A malformed or absent overlay falls back to the root commit.
+            pathlib.Path(overlay).write_text("{ not json")
+            assert guardrail._repo_origin(agent) == "claude"
+            assert guardrail._repo_origin(mine) == "human"
+            assert guardrail.load_origin_db(overlay) == {}
+        finally:
+            del os.environ[guardrail.ORIGIN_DB_ENV]
+
+
+def test_repo_origin_helper_cli() -> None:
+    """bin/repo-origin — the thing that makes the overlay usable by hand."""
+    import subprocess as _sp
+    import tempfile
+
+    tool = pathlib.Path(__file__).resolve().parent.parent / "bin" / "repo-origin"
+    if not tool.exists():  # the hooks ship without bin/ in some layouts
+        return
+
+    with tempfile.TemporaryDirectory() as tmp:
+        env = dict(os.environ, CLAUDE_REPO_ORIGINS=f"{tmp}/overlay.json")
+
+        def run(*args: str) -> str:
+            out = _sp.run(
+                [sys.executable, str(tool)] + list(args),
+                capture_output=True, text=True, env=env, timeout=30,
+            )
+            assert out.returncode == 0, f"{args} failed: {out.stderr}"
+            return out.stdout
+
+        agent = make_repo(f"{tmp}/agent", "scaffold" + TRAILER)
+        assert "claude" in run(agent), "reads the root commit with no overlay at all"
+
+        run(agent, "--set", "human", "--note", "handing off")
+        assert "human" in run(agent) and "override" in run(agent)
+        assert "handing off" in run("--list")
+
+        run(agent, "--unset")
+        assert "claude" in run(agent), "unset falls back to the root commit"
+        # The repo itself is never touched.
+        assert not (pathlib.Path(agent) / ".claude").exists()
 
 
 def test_end_to_end_under_system_python() -> None:
@@ -275,8 +363,10 @@ if __name__ == "__main__":
     test_origin_aware_mainline_push()
     test_push_repo_dir_reads_the_target_not_the_cwd()
     test_repo_origin_against_real_repos()
+    test_overlay_overrides_the_root_commit_both_ways()
+    test_repo_origin_helper_cli()
     test_end_to_end_under_system_python()
     print(
-        f"ok — {len(CASES) + len(BRANCH_CASES) + 5} guardrail cases passed "
+        f"ok — {len(CASES) + len(BRANCH_CASES) + 7} guardrail cases passed "
         f"(python {sys.version.split()[0]})"
     )

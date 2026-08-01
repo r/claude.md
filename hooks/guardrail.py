@@ -46,7 +46,11 @@ BranchFn = Callable[[], Optional[str]]
 # Takes the command segment (so a `git -C <dir> push` is judged against the repo
 # it actually pushes, not the session cwd) and returns "claude" | "human" | None.
 OriginFn = Callable[[str], Optional[str]]
-ORIGIN_MARKER = (".claude", "origin.json")
+# The origin overlay is deliberately NOT in the repo it describes: a repo's own
+# history already says who started it, and a marker committed into the tree
+# would leak this setup's bookkeeping into every project.
+ORIGIN_DB_ENV = "CLAUDE_REPO_ORIGINS"
+ORIGIN_DB_DEFAULT = "~/.claude/repo-origins.json"
 
 
 def _unknown_branch() -> str | None:
@@ -217,15 +221,49 @@ def _git_branch_resolver(cwd: str) -> BranchFn:
     return resolve
 
 
-def _repo_origin(directory: str) -> str | None:
-    """"claude" if this repo is Claude's own, "human"/None if it's the user's.
+def origin_db_path() -> str:
+    """The shared origin overlay. If ~/.claude is a shared or synced home, one file
+    serves every Claude instance on every host; $CLAUDE_REPO_ORIGINS overrides it (the
+    tests point it at a temp file so they never read the real one)."""
+    import os
 
-    Declared marker first (`.claude/origin.json` at the repo root), then the
-    trailer census: a history where EVERY commit carries `Co-Authored-By:
-    Claude` is a repo Claude started and Claude wrote. Merge commits carry no
-    trailer and so read as human — the fail-closed direction, which the marker
-    exists to override. Anything unreadable (no repo, empty history, git error)
-    returns None and the mainline gate stands.
+    return os.path.expanduser(os.environ.get(ORIGIN_DB_ENV) or ORIGIN_DB_DEFAULT)
+
+
+def load_origin_db(path: str | None = None) -> Rule:
+    """The overlay's `repos` map, or {} if it's absent//unreadable/malformed."""
+    try:
+        with open(path or origin_db_path()) as fh:
+            data = json.load(fh)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    repos = data.get("repos", data)
+    return repos if isinstance(repos, dict) else {}
+
+
+def repo_root_commits(git: Callable[..., Optional[str]]) -> list[str]:
+    """Every parentless commit, newest first — [] if there's no history yet."""
+    out = git("rev-list", "--max-parents=0", "HEAD")
+    return out.split() if out else []
+
+
+def _repo_origin(directory: str) -> str | None:
+    """"claude" if Claude started this repo, "human" if a person did, else None.
+
+    Who *started* a repo is a fact its own history already records, so nothing
+    has to be written into the repo to answer the question: a root commit
+    carrying `Co-Authored-By: Claude` was scaffolded by Claude. Later commits
+    don't enter into it — the gate protects a human's mainline, and a repo that
+    never had one doesn't grow one because a person edited a file in it.
+
+    The overlay (see origin_db_path) overrides that verdict in either direction
+    and lives OUTSIDE the repo, keyed by root-commit SHA so one entry follows
+    the project across clones, paths, and hosts.
+
+    Fails closed: no repo, no commits, a git error, or several roots that
+    disagree all return None, and the mainline gate stands.
     """
     import subprocess
 
@@ -241,25 +279,28 @@ def _repo_origin(directory: str) -> str | None:
             return None
         return out.stdout if out.returncode == 0 else None
 
-    root = git("rev-parse", "--show-toplevel")
-    if not root:
+    roots = repo_root_commits(git)
+    if not roots:
         return None
-    try:
-        import os
 
-        with open(os.path.join(root.strip(), *ORIGIN_MARKER)) as fh:
-            declared = json.load(fh).get("origin")
+    overlay = load_origin_db()
+    for sha in roots:
+        entry = overlay.get(sha)
+        declared = entry.get("origin") if isinstance(entry, dict) else entry
         if declared in {"claude", "human"}:
             return declared
-    except Exception:
-        pass  # no marker, or an unreadable one: fall through to the census
-    log = git("log", "--format=%H %(trailers:key=Co-Authored-By,valueonly,separator=%x2C)")
-    if log is None:
-        return None
-    lines = [line for line in log.splitlines() if line.strip()]
-    if not lines:
-        return None  # no history to judge — fail closed
-    return "claude" if all("Claude" in line for line in lines) else "human"
+
+    # Several roots means a grafted or subtree-merged history; every one of
+    # them has to be Claude's before the repo counts as Claude's.
+    for sha in roots:
+        trailers = git(
+            "log", "-1", "--format=%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)", sha
+        )
+        if trailers is None:
+            return None
+        if "Claude" not in trailers:
+            return "human"
+    return "claude"
 
 
 def _git_origin_resolver(cwd: str) -> OriginFn:
