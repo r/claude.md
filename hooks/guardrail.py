@@ -43,10 +43,34 @@ Rule = Dict[str, Any]
 # TypeError at import, the hook crashes, fail-open swallows it, and the guardrail
 # is silently gone. Minimum supported Python here is 3.9; keep it that way.
 BranchFn = Callable[[], Optional[str]]
+# Takes the command segment (so a `git -C <dir> push` is judged against the repo
+# it actually pushes, not the session cwd) and returns "claude" | "human" | None.
+OriginFn = Callable[[str], Optional[str]]
+# The origin overlay is deliberately NOT in the repo it describes: a repo's own
+# history already says who started it, and a marker committed into the tree
+# would leak this setup's bookkeeping into every project.
+ORIGIN_DB_ENV = "CLAUDE_REPO_ORIGINS"
+ORIGIN_DB_DEFAULT = "~/.claude/repo-origins.json"
 
 
 def _unknown_branch() -> str | None:
     return None
+
+
+def _unknown_origin(_segment: str) -> str | None:
+    """Default: origin unknown => human => the mainline gate stands."""
+    return None
+
+
+def push_repo_dir(segment: str, cwd: str) -> str:
+    """The repo a `git … push` acts on: its -C directory, else the session cwd."""
+    tokens = segment.split()
+    if "push" in tokens:
+        tokens = tokens[: tokens.index("push")]
+    for i, token in enumerate(tokens[:-1]):
+        if token == "-C":
+            return tokens[i + 1]
+    return cwd or "."
 
 
 def push_targets_default(segment: str, branch_of: BranchFn) -> bool:
@@ -94,15 +118,22 @@ def load_rules() -> dict[str, list[Rule]]:
 
 
 def _first_hit(
-    rules: list[Rule], text: str, branch_of: BranchFn = _unknown_branch
+    rules: list[Rule],
+    text: str,
+    branch_of: BranchFn = _unknown_branch,
+    origin_of: OriginFn = _unknown_origin,
 ) -> tuple[str, str, str | None] | None:
     for rule in rules:
         if not all(re.search(pattern, text) for pattern in rule["all"]):
             continue
-        if rule.get("guard") == "default-branch-push" and not push_targets_default(
-            text, branch_of
-        ):
-            continue
+        if rule.get("guard") == "default-branch-push":
+            if not push_targets_default(text, branch_of):
+                continue
+            # The gate protects a HUMAN's mainline. A repo Claude started and
+            # Claude wrote has none, so pushing its main is ordinary work.
+            # Anything we can't classify reads as human — see _repo_origin.
+            if origin_of(text) == "claude":
+                continue
         return rule["action"], rule["why"], rule.get("hint")
     return None
 
@@ -112,17 +143,21 @@ def classify(
     tool_input: Rule,
     rules: dict[str, list[Rule]],
     branch_of: BranchFn = _unknown_branch,
+    origin_of: OriginFn = _unknown_origin,
 ) -> tuple[str, str, str | None] | None:
     """Return (action, why, hint) for the first matching rule, else None.
 
-    Pure given branch_of — the only I/O is the injected current-branch lookup,
-    which defaults to "unknown" (conservative) so tests stay deterministic.
+    Pure given branch_of/origin_of — the only I/O is those injected lookups,
+    which both default to "unknown" (conservative) so tests stay deterministic.
     """
     if tool == "Bash":
         command = tool_input.get("command", "") or ""
         for segment in SEGMENT.split(command):
             hit = _first_hit(
-                rules.get("bash", []), WRAPPER.sub("", segment.strip()), branch_of
+                rules.get("bash", []),
+                WRAPPER.sub("", segment.strip()),
+                branch_of,
+                origin_of,
             )
             if hit:
                 return hit
@@ -186,13 +221,115 @@ def _git_branch_resolver(cwd: str) -> BranchFn:
     return resolve
 
 
+def origin_db_path() -> str:
+    """The shared origin overlay. If ~/.claude is a shared or synced home, one file
+    serves every Claude instance on every host; $CLAUDE_REPO_ORIGINS overrides it (the
+    tests point it at a temp file so they never read the real one)."""
+    import os
+
+    return os.path.expanduser(os.environ.get(ORIGIN_DB_ENV) or ORIGIN_DB_DEFAULT)
+
+
+def load_origin_db(path: str | None = None) -> Rule:
+    """The overlay's `repos` map, or {} if it's absent//unreadable/malformed."""
+    try:
+        with open(path or origin_db_path()) as fh:
+            data = json.load(fh)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    repos = data.get("repos", data)
+    return repos if isinstance(repos, dict) else {}
+
+
+def repo_root_commits(git: Callable[..., Optional[str]]) -> list[str]:
+    """Every parentless commit, newest first — [] if there's no history yet."""
+    out = git("rev-list", "--max-parents=0", "HEAD")
+    return out.split() if out else []
+
+
+def _repo_origin(directory: str) -> str | None:
+    """"claude" if Claude started this repo, "human" if a person did, else None.
+
+    Who *started* a repo is a fact its own history already records, so nothing
+    has to be written into the repo to answer the question: a root commit
+    carrying `Co-Authored-By: Claude` was scaffolded by Claude. Later commits
+    don't enter into it — the gate protects a human's mainline, and a repo that
+    never had one doesn't grow one because a person edited a file in it.
+
+    The overlay (see origin_db_path) overrides that verdict in either direction
+    and lives OUTSIDE the repo, keyed by root-commit SHA so one entry follows
+    the project across clones, paths, and hosts.
+
+    Fails closed: no repo, no commits, a git error, or several roots that
+    disagree all return None, and the mainline gate stands.
+    """
+    import subprocess
+
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(
+                ["git", "-C", directory] + list(args),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            return None
+        return out.stdout if out.returncode == 0 else None
+
+    roots = repo_root_commits(git)
+    if not roots:
+        return None
+
+    overlay = load_origin_db()
+    for sha in roots:
+        entry = overlay.get(sha)
+        declared = entry.get("origin") if isinstance(entry, dict) else entry
+        if declared in {"claude", "human"}:
+            return declared
+
+    # Several roots means a grafted or subtree-merged history; every one of
+    # them has to be Claude's before the repo counts as Claude's.
+    for sha in roots:
+        trailers = git(
+            "log", "-1", "--format=%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)", sha
+        )
+        if trailers is None:
+            return None
+        if "Claude" not in trailers:
+            return "human"
+    return "claude"
+
+
+def _git_origin_resolver(cwd: str) -> OriginFn:
+    """Lazy, memoized per-repo origin lookup, keyed by the push's target dir.
+
+    Like the branch resolver, only invoked when a rule's guard needs it — i.e.
+    a push that already resolved to main/master — so ordinary commands never
+    pay the two subprocesses.
+    """
+    cache: dict[str, str | None] = {}
+
+    def resolve(segment: str) -> str | None:
+        directory = push_repo_dir(segment, cwd)
+        if directory not in cache:
+            cache[directory] = _repo_origin(directory)
+        return cache[directory]
+
+    return resolve
+
+
 def main() -> None:
     data = json.load(sys.stdin)
+    cwd = data.get("cwd") or "."
     hit = classify(
         data.get("tool_name", ""),
         data.get("tool_input") or {},
         load_rules(),
-        _git_branch_resolver(data.get("cwd") or "."),
+        _git_branch_resolver(cwd),
+        _git_origin_resolver(cwd),
     )
     if hit:
         emit(*hit)

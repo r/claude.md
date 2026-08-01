@@ -62,6 +62,7 @@ relevant.** Almost every decision below follows from that.
 ├── bin/                Small tracked utilities, plain scripts with no Claude Code knowledge:
 │                        claude-bootstrap (set up a second machine), morph-mirror (+ its test),
 │                        morph-recover-orphans (assemble traces for sessions that died),
+│                        repo-origin (who started a repo — the mainline gate's overlay),
 │                        otel-spooler (offline OTLP buffer), vault-write + vault-spooler
 │                        (queue notes offline, deliver on reconnect; + tests, + .service).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
@@ -156,6 +157,20 @@ carries a `hint` that tells the agent how to keep working — branch off, push t
 mainline push in the approvals file — instead of just stopping. That promotes the CLAUDE.md "main is
 the edge" rule from advisory prose into a deterministic stop that fires even in bypass mode. It's a
 safety net for accidents and overreach, explicitly *not* a security boundary.
+
+That same guard also asks **whose** mainline it is, because the thing being protected is a *human's*
+history — your bisect, your review. A repo Claude created and Claude wrote has none of that, so the
+gate there was pure friction: a scratch project paying a branch-and-approvals-queue detour to defend
+a mainline no human ever touched. Origin is decided in the engine, not in prose (prose alone would
+leave the hook asking anyway), by a trailer census: a history where *every* commit carries
+`Co-Authored-By: Claude` scaffolded it, and a root commit of yours makes the repo yours however much
+Claude subsequently wrote in it. Later commits don't enter into it: a repo Claude started doesn't grow
+a human mainline because a person edited a file. It fails closed by construction — no repo, no
+commits, a grafted history whose roots disagree all read as yours — and the overrides live *outside*
+the repo, in `~/.claude/repo-origins.json` keyed by root-commit SHA, so one entry follows a project
+across clones, paths, and hosts without leaving this setup's bookkeeping in someone else's tree.
+`bin/repo-origin` reads and records them; read, never inferred, like every other declaration here. Force-push keeps no origin guard and stays gated everywhere:
+origin lifts "whose history is this," not "who feels it."
 
 **A gate you always say yes to is not a gate — measure the accept rate, not the prompt count.** The
 failure mode of a careful setup is not that it blocks too little; it's that it asks so often you stop

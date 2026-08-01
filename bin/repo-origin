@@ -1,0 +1,181 @@
+#!/usr/bin/env python3
+"""Read or record who started a git repo — the overlay the guardrail consults
+before it gates a push to main.
+
+The default answer needs no bookkeeping at all: a repo's root commit already
+records who scaffolded it, and one carrying `Co-Authored-By: Claude` is Claude's
+own. This tool exists for the cases that verdict gets wrong, and it writes the
+override to ~/.claude/repo-origins.json — NOT into the repo, which stays clean.
+
+    repo-origin                      # what is this repo, and why
+    repo-origin ~/code/foo           # ...for another repo
+    repo-origin --set claude --note "scaffolded by Claude; my commits are typos"
+    repo-origin --set human          # re-impose the gate on a Claude-made repo
+    repo-origin --unset              # drop the override, back to the root commit
+    repo-origin --list               # every override on this machine
+
+Entries are keyed by ROOT COMMIT SHA, so one follows the project across clones,
+paths, and hosts (if ~/.claude is a shared or synced home, every instance sees it).
+
+STDLIB ONLY, and it must import under the fleet's oldest Python (3.8) — same
+constraint as the hooks, for the same reason.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from typing import Any, Dict, List, Optional
+
+DB_ENV = "CLAUDE_REPO_ORIGINS"
+DB_DEFAULT = "~/.claude/repo-origins.json"
+VALID = ("claude", "human")
+
+
+def db_path() -> str:
+    return os.path.expanduser(os.environ.get(DB_ENV) or DB_DEFAULT)
+
+
+def git(directory: str, *args: str) -> Optional[str]:
+    try:
+        out = subprocess.run(
+            ["git", "-C", directory] + list(args),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return None
+    return out.stdout if out.returncode == 0 else None
+
+
+def root_commits(directory: str) -> List[str]:
+    out = git(directory, "rev-list", "--max-parents=0", "HEAD")
+    return out.split() if out else []
+
+
+def load_db(path: str) -> Dict[str, Any]:
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        return {"repos": {}}
+    except Exception as exc:
+        sys.exit("error: %s is unreadable (%s) — fix or move it by hand" % (path, exc))
+    if not isinstance(data, dict):
+        sys.exit("error: %s is not a JSON object" % path)
+    data.setdefault("repos", {})
+    return data
+
+
+def save_db(path: str, data: Dict[str, Any]) -> None:
+    """Atomic replace: several Claude instances may share this file, and a
+    half-written overlay would read as 'no override' — which fails closed, but
+    silently loses what was recorded."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    handle, tmp = tempfile.mkstemp(dir=directory, prefix=".repo-origins-")
+    try:
+        with os.fdopen(handle, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def inferred_origin(directory: str, roots: List[str]) -> Optional[str]:
+    for sha in roots:
+        trailers = git(
+            directory,
+            "log",
+            "-1",
+            "--format=%(trailers:key=Co-Authored-By,valueonly,separator=%x2C)",
+            sha,
+        )
+        if trailers is None:
+            return None
+        if "Claude" not in trailers:
+            return "human"
+    return "claude"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Read or record who started a repo (the guardrail's mainline gate).",
+    )
+    ap.add_argument("path", nargs="?", default=".", help="repo to inspect (default: cwd)")
+    ap.add_argument("--set", dest="set_to", choices=VALID, help="record an override")
+    ap.add_argument("--unset", action="store_true", help="drop the override")
+    ap.add_argument("--note", default="", help="why, recorded alongside --set")
+    ap.add_argument("--list", action="store_true", help="show every recorded override")
+    args = ap.parse_args()
+
+    path = db_path()
+
+    if args.list:
+        repos = load_db(path).get("repos", {})
+        if not repos:
+            print("no overrides recorded (%s)" % path)
+            return 0
+        for sha, entry in sorted(repos.items(), key=lambda kv: str(kv[1].get("path", ""))):
+            entry = entry if isinstance(entry, dict) else {"origin": entry}
+            print("%-8s %-7s %s" % (sha[:8], entry.get("origin", "?"), entry.get("path", "")))
+            if entry.get("note"):
+                print("         %s" % entry["note"])
+        return 0
+
+    directory = os.path.abspath(os.path.expanduser(args.path))
+    roots = root_commits(directory)
+    if not roots:
+        print("not a git repo with commits: %s" % directory, file=sys.stderr)
+        print("(the gate treats this as human-origin — it fails closed)", file=sys.stderr)
+        return 1
+    key = roots[-1]  # the earliest root is the repo's identity
+
+    if args.set_to or args.unset:
+        data = load_db(path)
+        if args.unset:
+            removed = any(data["repos"].pop(sha, None) is not None for sha in roots)
+            save_db(path, data)
+            print("override %s for %s" % ("dropped" if removed else "not found", directory))
+        else:
+            entry = {"origin": args.set_to, "path": directory}
+            if args.note:
+                entry["note"] = args.note
+            # Stamped by the caller, not by this tool: `date` is the shell's job
+            # and a wrong clock here would look authoritative.
+            data["repos"][key] = entry
+            save_db(path, data)
+            print("recorded %s as %s (root %s)" % (directory, args.set_to, key[:8]))
+        return 0
+
+    repos = load_db(path).get("repos", {})
+    for sha in roots:
+        entry = repos.get(sha)
+        declared = entry.get("origin") if isinstance(entry, dict) else entry
+        if declared in VALID:
+            print("%s: %s (recorded override, root %s)" % (directory, declared, sha[:8]))
+            return 0
+
+    verdict = inferred_origin(directory, roots)
+    if verdict is None:
+        print("%s: unknown — the gate stands" % directory)
+        return 0
+    why = (
+        "root commit is Claude's"
+        if verdict == "claude"
+        else "root commit is a person's" + (" (%d roots)" % len(roots) if len(roots) > 1 else "")
+    )
+    print("%s: %s (%s, root %s)" % (directory, verdict, why, key[:8]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

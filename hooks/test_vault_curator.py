@@ -86,6 +86,208 @@ class ArgvContract(unittest.TestCase):
         self.assertIn("haiku", vc.MODEL)
 
 
+class StructuredOutput(unittest.TestCase):
+    """The curator must ask for stream-json. Plain text mode is what let a run
+    with denied tool calls read as a success."""
+
+    def setUp(self):
+        self.argv = vc.build_curator_argv(Path("/tmp/x/s.digest.md"), "software", "/repo", "/usr/bin/claude")
+
+    def test_asks_for_stream_json_with_verbose(self):
+        i = self.argv.index("--output-format")
+        self.assertEqual(self.argv[i + 1], "stream-json")
+        self.assertIn("--verbose", self.argv, "stream-json under -p requires --verbose")
+
+    def test_runner_wraps_the_curator_without_changing_it(self):
+        runner = vc.build_runner_argv(self.argv, python_bin="/usr/bin/python3")
+        self.assertEqual(runner[0], "/usr/bin/python3")
+        self.assertEqual(runner[1], os.path.abspath(vc.__file__))
+        self.assertEqual(runner[2], vc.RUN_FLAG)
+        self.assertEqual(runner[3], "--")
+        self.assertEqual(runner[4:], self.argv, "the inner argv must pass through verbatim")
+
+    def test_runner_preserves_the_security_contract(self):
+        joined = " ".join(vc.build_runner_argv(self.argv))
+        self.assertNotIn("--dangerously-skip-permissions", joined)
+        self.assertNotIn("bypassPermissions", joined)
+        self.assertIn("--allowedTools", joined)
+
+
+class RenderEvent(unittest.TestCase):
+    """A denial has to be legible in the log at a glance."""
+
+    def test_tool_call_and_success_are_rendered(self):
+        call = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "/h/.claude/bin/vault-write --type note"}}]}}
+        self.assertIn("CALL Bash: /h/.claude/bin/vault-write --type note", vc.render_event(call)[0])
+        ok = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "queued note-abc.md"}]}}
+        self.assertEqual(vc.render_event(ok), ["  ok: queued note-abc.md"])
+
+    def test_failed_tool_result_is_marked(self):
+        row = {"type": "user", "message": {"content": [
+            {"type": "tool_result", "is_error": True, "content": "permission denied"}]}}
+        self.assertEqual(vc.render_event(row), ["  FAILED: permission denied"])
+
+    def test_assistant_prose_survives(self):
+        row = {"type": "assistant", "message": {"content": [{"type": "text", "text": "Wrote three notes."}]}}
+        self.assertEqual(vc.render_event(row), ["Wrote three notes."])
+
+    def test_permission_denials_are_read_off_the_result_event(self):
+        """Verbatim shape from a real `claude -p --output-format stream-json`
+        denial (2026-07-31). Note subtype "success" and is_error False:
+        the RUN succeeded, only the work did not. Anything keyed off is_error
+        alone would call this a clean run."""
+        row = {
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": "I need permission to run that command.",
+            "permission_denials": [{
+                "tool_name": "Bash",
+                "tool_use_id": "toolu_01V6RmiH4EquaeRMGcUSXKT3",
+                "tool_input": {"command": "/home/user/.claude/bin/vault-write --type note --title probe",
+                               "description": "Run vault-write command"},
+            }],
+        }
+        self.assertEqual(len(vc._result_denials(row)), 1)
+        rendered = vc.render_event(row)
+        self.assertEqual(rendered, ["  DENIED: Bash /home/user/.claude/bin/vault-write --type note --title probe"])
+
+    def test_result_without_denials_is_quiet(self):
+        row = {"type": "result", "subtype": "success", "is_error": False, "result": "ok"}
+        self.assertEqual(vc._result_denials(row), [])
+        self.assertEqual(vc.render_event(row), [])
+
+    def test_malformed_denials_do_not_raise(self):
+        for bad in ("nope", ["str", 3], None, [{}]):
+            row = {"type": "result", "permission_denials": bad}
+            self.assertIsInstance(vc._result_denials(row), list)
+            self.assertIsInstance(vc.render_event(row), list)
+
+    def test_thinking_blocks_are_not_logged(self):
+        """Real runs emit `thinking` blocks; they are noise and a place secrets
+        could surface, so the log leaves them out."""
+        row = {"type": "assistant", "message": {"content": [
+            {"type": "thinking", "thinking": "internal chain of thought"}]}}
+        self.assertEqual(vc.render_event(row), [])
+
+    def test_garbage_rows_do_not_raise(self):
+        for row in ({}, {"type": "assistant"}, {"type": "user", "message": {"content": "nope"}},
+                    {"type": "assistant", "message": {"content": [None, 7]}}):
+            self.assertIsInstance(vc.render_event(row), list)
+
+    def test_counts_only_vault_write_calls_as_attempts(self):
+        read = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/d.md"}}]}}
+        self.assertEqual(vc._event_counts(read), (0, 0))
+        write = {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "{} --type note".format(vc.VAULT_WRITE)}}]}}
+        self.assertEqual(vc._event_counts(write), (1, 0))
+
+
+class Reconciliation(unittest.TestCase):
+    """The defect this fixes: the model says it wrote notes, nothing did, and
+    no one compares the claim to the queue."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        (self.tmp / "sent").mkdir()
+        self.p = mock.patch.object(vc, "QUEUE_DIR", self.tmp)
+        self.p.start()
+
+    def tearDown(self):
+        self.p.stop()
+
+    def _run(self, stream_rows, notes_written=0):
+        """Fake `claude` as a python one-liner that prints the given stream rows
+        and drops `notes_written` files into the queue, so the reconciliation is
+        exercised against a real directory rather than a mock."""
+        script = (
+            "import json,sys,pathlib\n"
+            "rows = json.loads(sys.argv[1])\n"
+            "q = pathlib.Path(sys.argv[2])\n"
+            "[print(json.dumps(r), flush=True) for r in rows]\n"
+            "[ (q / ('n%d.md' % i)).write_text('x') for i in range(int(sys.argv[3])) ]\n"
+        )
+        argv = [sys.executable, "-c", script, json.dumps(stream_rows), str(self.tmp), str(notes_written)]
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            vc.run_curator(argv)
+        return out.getvalue()
+
+    def test_success_reports_the_actual_count(self):
+        rows = [{"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Bash", "input": {"command": "{} --type note".format(vc.VAULT_WRITE)}}]}}]
+        out = self._run(rows, notes_written=2)
+        self.assertIn("curator: OK - 2 note(s) reached the queue", out)
+
+    def test_claimed_but_wrote_nothing_is_called_out(self):
+        rows = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "{} --type note".format(vc.VAULT_WRITE)}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "is_error": True, "content": "permission denied"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Done. Three durable patterns enqueued to the vault."}]}},
+        ]
+        out = self._run(rows, notes_written=0)
+        self.assertIn("WROTE NOTHING", out)
+        self.assertIn("1 vault-write attempt(s)", out)
+        self.assertIn("FAILED: permission denied", out,
+                      "the denial itself must appear, not just the verdict")
+        # the model's false claim is still logged -- but no longer the last word
+        self.assertLess(out.index("Three durable patterns"), out.index("WROTE NOTHING"))
+
+    def test_denial_is_named_as_the_cause(self):
+        """The 2026-07-31 03:06 failure, replayed: three notes claimed, every
+        call denied, queue untouched, run reports success."""
+        rows = [
+            {"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "Bash", "input": {"command": "{} --type pattern".format(vc.VAULT_WRITE)}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "is_error": True, "content": "Permission to use Bash has been denied"}]}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "Done. Three durable patterns enqueued to the vault."}]}},
+            {"type": "result", "subtype": "success", "is_error": False, "result": "Done.",
+             "permission_denials": [{"tool_name": "Bash",
+                                     "tool_input": {"command": "{} --type pattern".format(vc.VAULT_WRITE)}}]},
+        ]
+        out = self._run(rows, notes_written=0)
+        self.assertIn("WROTE NOTHING", out)
+        self.assertIn("DENIED by the permission system", out)
+        self.assertIn("DENIED: Bash", out)
+
+    def test_honest_abstention_is_not_an_error(self):
+        rows = [{"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "Nothing durable here."}]}}]
+        out = self._run(rows, notes_written=0)
+        self.assertIn("nothing durable - no notes attempted", out)
+        self.assertNotIn("WROTE NOTHING", out)
+
+    def test_broken_invocation_is_distinguished_from_honest_abstention(self):
+        """Both write zero notes; only the log can tell them apart, and that is
+        what would catch a flag rename leaving the curator dead for weeks."""
+        argv = [sys.executable, "-c", "import sys; sys.stderr.write('unknown option --output-format\\n'); sys.exit(2)"]
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            vc.run_curator(argv)
+        self.assertIn("NO OUTPUT", out.getvalue())
+        self.assertIn("exit 2", out.getvalue())
+        self.assertNotIn("nothing durable", out.getvalue())
+
+    def test_non_json_output_is_kept_not_dropped(self):
+        argv = [sys.executable, "-c", "print('traceback: boom')"]
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            vc.run_curator(argv)
+        self.assertIn("traceback: boom", out.getvalue())
+
+    def test_unstartable_child_does_not_raise(self):
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdout", out):
+            vc.run_curator(["/nonexistent/binary-xyz"])
+        self.assertIn("could not start", out.getvalue())
+
+
 class Digest(unittest.TestCase):
     def test_carries_intent_and_actions_not_tool_results(self):
         rows = [
@@ -161,6 +363,14 @@ class MainFlow(unittest.TestCase):
         out = self._run(_rows_working(10))
         self.assertEqual(len(self.spawned), 1, "a substantive session should spawn the curator")
         self.assertEqual(out, "", "spawning must be silent — no nudge, no wait")
+
+    def test_spawns_the_reconciling_runner_not_the_bare_curator(self):
+        self._run(_rows_working(10), session_id="runner")
+        argv = self.spawned[0]
+        self.assertEqual(argv[2], vc.RUN_FLAG,
+                         "the hook must spawn the wrapper, or nothing reconciles the result")
+        self.assertIn("--output-format", argv)
+        self.assertIn("stream-json", argv)
 
     def test_infra_session_hints_infra_domain(self):
         self._run(_rows_working(10, infra=True))

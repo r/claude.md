@@ -107,9 +107,58 @@ Instrument as you build, the way you test — not bolted on after an incident.
 4. Add or update tests **and docs**; run the quality gate. Don't re-run an unchanged gate hoping for a
    different result — the same command on unchanged code adds no information.
 5. Summarize what changed, how to test it, what's still risky, and — briefly — what you deliberately
-   **didn't** touch (scope evidence). Commit when the gate is green — code, tests, and docs together,
-   on a branch (branch off first if you're on main). Pushing the feature branch is fine too; anything
-   that lands on main/master waits for an explicit ok.
+   **didn't** touch (scope evidence). Commit when the gate is green — code, tests, and docs together.
+   Where that lands depends on who started the repo — see below.
+
+## Whose repo is it? (the mainline gate)
+
+The main-push gate in `CLAUDE.md` exists to protect *a human's* mainline: my history, my bisect, my
+review. A repo that Claude created and Claude wrote has no such thing to protect, so the gate there
+is friction with nothing on the other side of it. Which repo you're in decides the whole shape of
+the work:
+
+- **Claude-origin repo** — commit and push **straight to main**. No branch, no approvals queue, no
+  asking. Work on main the way you'd work on a scratch branch: the gate plus `git revert` is the
+  safety net.
+- **Human-origin repo** — unchanged from before. Branch off first (`git switch -c <topic>`),
+  commit and push the *branch* freely, and the merge/push to main waits for an explicit ok (in auto
+  mode: skip it, append to `NEEDS-APPROVAL.md` with the exact merge command staged, keep going).
+
+**The origin test is the root commit — nothing is written into the repo.** Who *started* a project is
+a fact its own history already records, so the answer needs no marker file, no bookkeeping in the
+tree, and no `.claude/` directory in someone else's project:
+
+```bash
+~/.claude/bin/repo-origin              # or: repo-origin <path>
+```
+
+A root commit carrying `Co-Authored-By: Claude` means Claude scaffolded it. **Later commits don't
+enter into it** — a repo Claude started stays Claude's after a person edits a file in it, because the gate
+protects a human's mainline and this repo never had one. The converse holds too: a repo a *person* started
+stays theirs however much of it Claude subsequently wrote. It fails closed by construction — no repo,
+no commits, a grafted history whose roots disagree, or a git call that errors all read as the user's.
+
+**The overrides live outside the repo, in one file every instance shares.**
+`~/.claude/repo-origins.json`, keyed by root-commit SHA so a single entry follows the project across
+clones, paths, and hosts (if `~/.claude` is a shared or synced home, every host reads the same file; a
+machine with its own copy keeps its own overrides, and the root-commit test still works there unaided).
+Record one with the helper rather than by hand:
+
+```bash
+~/.claude/bin/repo-origin --set human  --note "handing this one off"   # re-impose the gate on a Claude-made repo
+~/.claude/bin/repo-origin --set claude --note "I ran git init, Claude wrote the rest"
+~/.claude/bin/repo-origin --unset                                      # back to the root commit
+~/.claude/bin/repo-origin --list                                       # every override on this machine
+```
+
+Same discipline as every other declaration here: **read, never inferred.** A repo that merely *looks*
+agent-generated declares nothing, and writing `--set claude` to unblock yourself is the one move this
+whole mechanism exists to prevent — it's a note the user leaves for you, not a lock you may pick.
+
+**What stays gated in a Claude-origin repo:** force-push anywhere, a push that *triggers* something
+outward (a deploy, a package publish, a release workflow, Pages), and any repo with another
+collaborator or a downstream consumer. Origin lifts "whose history is this," not "who feels it" —
+which is why this setup's own repos are recorded as `human` despite Claude having started them.
 
 ## Quality gate (unless the repo defines its own)
 ```bash

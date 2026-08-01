@@ -71,10 +71,15 @@ you're not on. Hand me something runnable, not a wall of shell to copy out of ch
 *These are gated in every mode, and **auto mode is the default** — so assume nobody is there to say
 yes. Don't block waiting on me: skip the item, record it to the approvals queue, and keep going (see
 **Auto mode**). A default of "proceed" makes this list matter more, not less.*
-- Push to **main/master** (or force-push anywhere), deploy, or call a paid / external API.
-  Everyday git is *not* gated: committing and pushing feature branches is normal work — do it
-  freely. **Main is the edge.** If you're sitting on main and need to commit, branch first
-  (`git switch -c <topic>`) and work there; the mainline push/merge is the step that waits for me.
+- Push to the **main/master of a repo a human started** (or force-push anywhere), deploy, or call a
+  paid / external API. Everyday git is *not* gated: committing and pushing feature branches is
+  normal work — do it freely. **Main is the edge — but only in a repo that isn't yours.** In a repo
+  *Claude* started and Claude wrote, commit and push to main directly; there's no human's mainline
+  to protect. In a repo a human started and we're editing, the mainline push/merge still waits for
+  me: branch first (`git switch -c <topic>`) and work there. Which is which is the repo's **root
+  commit**, read with `~/.claude/bin/repo-origin` — **run it, don't assume it**, and a repo you
+  can't classify is mine. Overrides live in `~/.claude/repo-origins.json`, never in the repo
+  (`rules/software.md`).
 - Set up anything that changes behavior later on its own ("flips in a week"). Staged rollouts default
   to **observe / logging only**; the behavior change is a separate, explicit step.
 - Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.
@@ -89,10 +94,15 @@ The declaration is read from the marker file or asked for once — **never infer
 environment name, and never assumed in order to unblock yourself. No marker means the normal gates.
 
 ## Auto mode — the default posture
-**Auto mode is the default.** Assume nobody is watching each step. Most sessions run hands-off —
-auto-accept edits, `/loop`, a workflow, a scheduled agent — and there, stopping to ask a question
-nobody is present to answer just stalls the work. So the confirmation gates relax **for reversible
-work only**.
+**Auto mode is the default.** Literally: `permissions.defaultMode` is `auto` in `settings.json`, so
+every session starts in the harness's classifier-driven auto mode rather than prompting per action.
+Assume nobody is watching each step. Most sessions run hands-off — auto mode, `/loop`, a workflow, a
+scheduled agent — and there, stopping to ask a question nobody is present to answer just stalls the
+work. So the confirmation gates relax **for reversible work only**.
+
+The harness's auto-mode classifier is a *floor*, not a substitute for the judgment below. It blocks
+the obviously irreversible; it does not know what this particular network's blast radius is. A
+`PreToolUse` guardrail hook still runs in every mode, and the "Never do these" list still stands.
 
 This changes exactly one thing: **who has to signal.** It is not a change to *what* is gated. Every
 item on the "Never do these" list above is as gated as it ever was — auto mode changes how you handle
