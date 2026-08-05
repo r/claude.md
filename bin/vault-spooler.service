@@ -15,6 +15,29 @@
 #   systemctl --user enable --now vault-spooler
 #   loginctl enable-linger "$USER"   # so it drains when you're not logged in
 #
+# IF ~/.config IS ON A SHARED NETWORK HOME (nuc-1 / nuc-3 mount nas-1's export):
+#   `systemctl --user enable` does not enable this on the machine you ran it on.
+#   The unit file AND the default.target.wants symlink that represents enablement
+#   both live on the shared home, so it is enabled on EVERY host that mounts it and
+#   starts a user systemd instance for you. Two drainers on one queue is not a
+#   double-write — delivery is idempotent on the note's content hash, as above —
+#   but it is two processes racing to move and unlink the same files.
+#
+#   You cannot fix it with `systemctl --user disable` on the other host: that
+#   unlinks the shared symlink and stops the spooler everywhere. Pin it instead,
+#   with a DROP-IN rather than an edit here, because the `cp` above would discard
+#   an inline edit on the next reinstall:
+#
+#     mkdir -p ~/.config/systemd/user/vault-spooler.service.d
+#     printf '[Unit]\nConditionHost=%s\n' "$(hostname -s)" \
+#       > ~/.config/systemd/user/vault-spooler.service.d/10-pin-to-host.conf
+#     systemctl --user daemon-reload
+#
+#   Deliberately NOT a ConditionHost in this file: this repo is portable across
+#   machines and a hardcoded hostname here would stop the spooler working on all
+#   the others. The hazard belongs to that one shared home, so the fix lives there.
+#   Applied on nuc-3 2026-08-05. Background: nuc-3's code-sync docs/MULTI-HOST.md.
+#
 # Health:  python3 ~/.local/bin/vault-spooler.py --status
 [Unit]
 Description=Vault knowledge spooler (queue notes offline, deliver on reconnect)
