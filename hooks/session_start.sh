@@ -4,6 +4,11 @@
 # (SSH, servers, a homelab). Read-only; always exits 0.
 set +e
 
+# Kill switch -- CLAUDE_HOOKS_OFF=<id>[,<id>...] or =all silences this hook.
+# Full rationale, and why guardrail.py has none, is in doc_drift.sh.
+_hoff=",${CLAUDE_HOOKS_OFF:-},"; _hoff=${_hoff// /}
+case "$_hoff" in *,all,*|*,session_start,*) exit 0 ;; esac
+
 # Read-only means read-only: `git status` normally rewrites the index to cache
 # refreshed stat info, and a hook killed by a timeout would leave that lock
 # orphaned. See the note in statusline.sh.

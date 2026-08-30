@@ -14,6 +14,11 @@
 # Companion: morph-global-stop.sh
 set -u
 
+# Kill switch -- CLAUDE_HOOKS_OFF=<id>[,<id>...] or =all silences this hook.
+# Full rationale, and why guardrail.py has none, is in doc_drift.sh.
+_hoff=",${CLAUDE_HOOKS_OFF:-},"; _hoff=${_hoff// /}
+case "$_hoff" in *,all,*|*,morph,*|*,morph_global_prompt,*) exit 0 ;; esac
+
 # The silent central store. Everything lands here, keyed by session + cwd.
 MORPH_STORE="${MORPH_TRACES_STORE:-$HOME/.claude/morph-traces}"
 

@@ -13,6 +13,17 @@ rules used to be YAML, so any machine without PyYAML installed had a guardrail
 that silently allowed everything. A security control you can disarm by NOT
 installing something is not a control. The rules are now a Python dict literal,
 which every Python can read.
+
+NO KILL SWITCH, for the same reason. Every other hook honours CLAUDE_HOOKS_OFF
+so you can silence it while debugging it; this one does not, and naming
+`guardrail` (or `all`) in that variable does nothing. The other hooks are
+ergonomics — a nudge, a formatter, a status line — and the cost of a wrong
+silence is a missing reminder. This one is the deterministic half of the "never
+do these" list, and a control an env var can switch off is a control an
+injection can switch off: one settings.json `env` block, or one exported
+variable, and the gate is gone with nothing in the transcript to say so. If it
+is genuinely in the way, edit settings.json and say so out loud in the diff —
+that is a change with an author and a commit, which is the whole difference.
 """
 
 from __future__ import annotations

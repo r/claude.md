@@ -4,6 +4,11 @@
 # config). Silent, and always exits 0 (never blocks or fails the turn).
 set +e
 
+# Kill switch -- CLAUDE_HOOKS_OFF=<id>[,<id>...] or =all silences this hook.
+# Full rationale, and why guardrail.py has none, is in doc_drift.sh.
+_hoff=",${CLAUDE_HOOKS_OFF:-},"; _hoff=${_hoff// /}
+case "$_hoff" in *,all,*|*,py_autoformat,*) exit 0 ;; esac
+
 input=$(cat)
 file=$(printf '%s' "$input" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("tool_input") or {}).get("file_path",""))' 2>/dev/null)
 

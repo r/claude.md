@@ -7,6 +7,14 @@
 # up exactly when code has outrun the docs. Rate-limited to once per 15 min/repo.
 set +e
 
+# Kill switch. CLAUDE_HOOKS_OFF=<id>[,<id>...] (or =all) silences this hook for
+# the session -- for when the hook itself is the thing you are debugging. Ids are
+# the filename without extension, '-' written as '_'. Pure bash, no subprocess,
+# no file to be missing: an absent switch leaves the hook ON, which is the only
+# safe direction for a kill switch. guardrail.py deliberately has none.
+_hoff=",${CLAUDE_HOOKS_OFF:-},"; _hoff=${_hoff// /}
+case "$_hoff" in *,all,*|*,doc_drift,*) exit 0 ;; esac
+
 # Every git call below only reads state, so none may take .git/index.lock — a
 # Stop hook killed mid-run would orphan it and wedge every later git command in
 # the repo. This covers `git status`; see the note at `changed=` for the working

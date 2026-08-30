@@ -3,6 +3,11 @@
 # Reads Claude Code's session JSON on stdin. Always prints something; never fails.
 set +e
 
+# Kill switch -- CLAUDE_HOOKS_OFF=<id>[,<id>...] or =all silences this hook.
+# Full rationale, and why guardrail.py has none, is in doc_drift.sh.
+_hoff=",${CLAUDE_HOOKS_OFF:-},"; _hoff=${_hoff// /}
+case "$_hoff" in *,all,*|*,statusline,*) exit 0 ;; esac
+
 # The statusline runs constantly and on a short timeout — a SIGKILL mid-`git
 # status` orphans a zero-byte .git/index.lock in whatever repo you're in, and
 # every later git command then refuses to run. `git status` looks read-only but

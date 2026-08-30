@@ -124,6 +124,12 @@ def _prune(now: float) -> None:
 
 
 def main() -> None:
+    # Kill switch -- see the note in doc_drift.sh. An unset or unparseable
+    # CLAUDE_HOOKS_OFF leaves the hook ON; only an exact id match turns it off.
+    _hoff = "," + os.environ.get("CLAUDE_HOOKS_OFF", "").replace(" ", "") + ","
+    if ",all," in _hoff or ",checkpoint," in _hoff:
+        return
+
     try:
         raw = sys.stdin.read().strip()
     except Exception:

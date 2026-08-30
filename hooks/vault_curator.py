@@ -532,6 +532,12 @@ def _disabled() -> bool:
 
 
 def main() -> None:
+    # Kill switch -- see the note in doc_drift.sh. An unset or unparseable
+    # CLAUDE_HOOKS_OFF leaves the hook ON; only an exact id match turns it off.
+    _hoff = "," + os.environ.get("CLAUDE_HOOKS_OFF", "").replace(" ", "") + ","
+    if ",all," in _hoff or ",vault_curator," in _hoff:
+        return
+
     # Child mode, dispatched before the recursion guard on purpose: the runner
     # is spawned WITH the guard set (so the curator's own Stop does not
     # re-spawn), and would otherwise bail here before doing its job.

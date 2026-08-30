@@ -119,6 +119,32 @@ being asked (`checkpoint.py`). And below all of it sits `bin/` — plain scripts
 knowledge at all, runnable from a shell, a systemd unit, or an agent alike. Anything that has to work
 when Claude *isn't* running belongs there rather than in a hook.
 
+### Turning a hook off
+
+Every hook honours `CLAUDE_HOOKS_OFF` — a comma-separated list of hook ids, or `all`:
+
+```bash
+CLAUDE_HOOKS_OFF=doc_drift,morph claude      # this session only
+```
+
+Ids are the filename without its extension, `-` written as `_`: `session_start`, `py_autoformat`,
+`checkpoint`, `doc_drift`, `statusline`, `vault_curator`, `vault_nudge`, `morph_global_prompt`,
+`morph_global_stop`, plus `morph` as an alias for both morph hooks. Matching is exact — `doc` does
+not silence `doc_drift` — and an unset, misspelled, or unparseable variable leaves every hook **on**,
+which is the only safe direction for an off-switch. (`VAULT_CURATOR=0` still works and still means
+the same thing.)
+
+The point is debugging. When the hook itself is the thing that's broken you need one session without
+it, and editing `settings.json` to get that is how a hook ends up commented out for a week.
+
+**`guardrail.py` has no switch, and naming it does nothing.** The others are ergonomics — a nudge, a
+formatter, a status line — where the cost of a wrong silence is a missed reminder. That one is the
+deterministic half of "never do these", and a control an env var can turn off is a control an
+injection can turn off: one `env` block in `settings.json` and the gate is gone, with nothing in the
+transcript to say so. If it genuinely has to go, unwire it in `settings.json` — a change with an
+author and a commit, which is the whole difference. `hooks/test_hookswitch.sh` asserts both halves:
+that each hook goes quiet when named, and that the guardrail still fires however it is spelled.
+
 ---
 
 ## Decisions, codified

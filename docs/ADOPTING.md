@@ -96,3 +96,15 @@ private repo.
 
 Anything here can be disabled in `settings.json` (remove a hook) or by starting Claude Code with
 `--safe-mode`. The tools *suggest and review*; you decide what actually happens.
+
+For a single session — when a hook is misbehaving and you want to run without it rather than edit
+your config — every hook honours `CLAUDE_HOOKS_OFF`, a comma-separated list of hook ids or `all`:
+
+```bash
+CLAUDE_HOOKS_OFF=doc_drift,morph claude
+```
+
+Ids are the filename without its extension, `-` written as `_`. Matching is exact, and an unset or
+misspelled value leaves the hooks **on**. `guardrail.py` is the one exception: it has no switch and
+naming it does nothing, because a safety control an env var can disarm is not a safety control —
+see the README. To remove that one you edit `settings.json`, deliberately and in a commit.
