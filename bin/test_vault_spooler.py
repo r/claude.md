@@ -332,11 +332,110 @@ def test_status_reports_problems() -> None:
         check("dead flagged loudly", "NEEDS ATTENTION" in proc.stdout)
 
 
+def drain_local(queue: Path, inbox: Path) -> subprocess.CompletedProcess:
+    """Drain with VAULT_LOCAL_INBOX set and NO upstream, so a silent fallback to
+    HTTP would fail the test rather than rescue it."""
+    env = dict(os.environ)
+    env["VAULT_QUEUE_DIR"] = str(queue)
+    env["VAULT_LOCAL_INBOX"] = str(inbox)
+    env.pop("VAULT_UPSTREAM", None)
+    return subprocess.run(
+        [sys.executable, str(SPOOL), "--once"],
+        capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+def test_local_delivery() -> None:
+    """The happy path: a note lands in the inbox with no HTTP involved at all."""
+    with tempfile.TemporaryDirectory() as d:
+        q = Path(d) / "queue"; q.mkdir()
+        inbox = Path(d) / "inbox"; inbox.mkdir()
+        enqueue(q, "local delivery works", "body text here")
+        proc = drain_local(q, inbox)
+
+        landed = sorted(inbox.glob("*.md"))
+        check("local: note lands in the inbox", len(landed) == 1, proc.stderr)
+        check("local: content is intact", "body text here" in landed[0].read_text())
+        check("local: queue is drained", pending(q) == [])
+        check("local: moved to sent/, not unlinked",
+              len(list((q / "sent").glob("*.md"))) == 1)
+        check("local: no temp file left behind",
+              list(inbox.glob(".*.tmp")) == [], "a crash-safe temp was orphaned")
+
+
+def test_local_temp_is_never_scannable() -> None:
+    """The vault agent's scan skips non-.md files, so the temp must not end in .md
+    or a half-written note gets parsed and quarantined with an alarm."""
+    with tempfile.TemporaryDirectory() as d:
+        q = Path(d) / "queue"; q.mkdir()
+        inbox = Path(d) / "inbox"; inbox.mkdir()
+        enqueue(q, "temp naming", "x" * 5000)
+        drain_local(q, inbox)
+        names = [p.name for p in inbox.iterdir()]
+        tmps = [n for n in names if ".tmp" in n]
+        check("local: any temp name is invisible to a *.md scan",
+              all(not n.endswith(".md") for n in tmps), str(names))
+
+
+def test_local_rejects_bad_filename() -> None:
+    """A name the proxy would have refused must be refused here too — and
+    quarantined rather than retried forever."""
+    with tempfile.TemporaryDirectory() as d:
+        q = Path(d) / "queue"; q.mkdir()
+        inbox = Path(d) / "inbox"; inbox.mkdir()
+        (q / "not-a-valid-name.md").write_text("---\ntitle: x\n---\nbody\n")
+        proc = drain_local(q, inbox)
+
+        check("local: bad filename never reaches the inbox",
+              sorted(inbox.glob("*.md")) == [], proc.stderr)
+        check("local: bad filename quarantined to dead/",
+              len(list((q / "dead").glob("*.md"))) == 1, proc.stderr)
+        check("local: queue not wedged by the bad entry", pending(q) == [])
+
+
+def test_local_replay_overwrites() -> None:
+    """Same property PUT had: redelivering a given queue file overwrites one
+    inbox object instead of duplicating it."""
+    with tempfile.TemporaryDirectory() as d:
+        q = Path(d) / "queue"; q.mkdir()
+        inbox = Path(d) / "inbox"; inbox.mkdir()
+        enqueue(q, "replay me", "first")
+        drain_local(q, inbox)
+        landed = sorted(inbox.glob("*.md"))[0]
+        (q / landed.name).write_bytes(landed.read_bytes())   # at-least-once replay
+        drain_local(q, inbox)
+
+        check("local: replay overwrites, does not duplicate",
+              len(sorted(inbox.glob("*.md"))) == 1)
+
+
+def test_local_unwritable_keeps_everything() -> None:
+    """If the inbox is not writable — the state before the group permissions land —
+    nothing may be lost. It must behave like offline: keep everything, back off,
+    quarantine nothing."""
+    with tempfile.TemporaryDirectory() as d:
+        q = Path(d) / "queue"; q.mkdir()
+        inbox = Path(d) / "inbox"; inbox.mkdir()
+        enqueue(q, "unwritable inbox", "must not be lost")
+        os.chmod(inbox, 0o555)
+        try:
+            proc = drain_local(q, inbox)
+            check("local: note retained when inbox is unwritable",
+                  len(pending(q)) == 1, proc.stderr)
+            check("local: not quarantined as poison (it is transient)",
+                  list((q / "dead").glob("*.md")) == [], proc.stderr)
+        finally:
+            os.chmod(inbox, 0o755)
+
+
 if __name__ == "__main__":
     for fn in (test_enqueue_format, test_domain_is_required_and_explicit, test_correlation_key, test_content_hash_dedups, test_delivery_and_sent,
                test_replay_is_idempotent, test_offline_keeps_everything,
                test_4xx_quarantine_5xx_retry, test_cap_refuses_never_evicts,
-               test_status_reports_problems):
+               test_status_reports_problems,
+               test_local_delivery, test_local_temp_is_never_scannable,
+               test_local_rejects_bad_filename, test_local_replay_overwrites,
+               test_local_unwritable_keeps_everything):
         fn()
     print()
     if FAILURES:

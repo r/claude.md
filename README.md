@@ -332,8 +332,12 @@ even a localhost port, so it behaves identically on a server and on a laptop wit
 there's never a reason to skip writing something down "because we're offline." `bin/vault-spooler.py`
 drains the queue later over HTTP PUT to whatever endpoint you configure (`VAULT_UPSTREAM`), scoped to
 one inbox directory and nothing else; something on the other side files notes from there into their
-final home. That scoping is the design: **one writer of the canonical files**, so a two-way merge
-never has to exist.
+final home. On a host where that store *is* a local directory, `VAULT_LOCAL_INBOX` skips HTTP
+entirely and writes into the inbox directly — and then the spooler has to re-enforce the three rules
+the reverse proxy owned on the network path (the filename regex, the size cap, no traversal), because
+whatever reads that inbox trusts them. Duplicating a contract is the honest cost of the shortcut,
+which is why the local path is opt-in and never inferred from the host. That scoping is the
+design: **one writer of the canonical files**, so a two-way merge never has to exist.
 
 It's a fork of `bin/otel-spooler.py`, which was already a correct store-and-forward implementation,
 and the three places it diverges are all the same point: **knowledge is not telemetry.** The OTel
@@ -349,7 +353,9 @@ over-cap queue is surfaced in the session banner and by `--status`, not one stde
 HTTP listener at all — you control the writer, so the daemon is drain-only and nothing needs to be
 running for a note to survive. `bin/test_vault_spooler.py` covers delivery, crash-replay idempotency,
 offline-keeps-everything, 4xx-quarantine vs. 5xx-retry, and the no-eviction cap against a real HTTP
-server. Point it at your own endpoint, or leave `VAULT_UPSTREAM` unset and the queue is simply a local
+server — and, for the local path, that the crash-safe temp file can never be picked up by a `*.md`
+scan mid-write, that a name violating the contract is quarantined rather than retried forever, and
+that an unwritable inbox behaves exactly like being offline instead of losing a note. Point it at your own endpoint, or leave `VAULT_UPSTREAM` unset and the queue is simply a local
 capture log.
 
 The catch with capture-when-worthwhile is that *nothing fires it*. Writing a note is a judgment call

@@ -35,6 +35,10 @@ This process only moves already-durable files.
 Config via env (see ~/.config/vault-spooler.env):
   VAULT_QUEUE_DIR       default ~/.claude/vault-queue
   VAULT_UPSTREAM        e.g. https://vault-inbox.example.com  (REQUIRED to forward)
+  VAULT_LOCAL_INBOX     path to the vault's Inbox/Unprocessed. When set, notes are
+                        written straight there and HTTP is skipped entirely — for a
+                        host where the vault is a local directory. Takes precedence
+                        over VAULT_UPSTREAM. Leave unset on a laptop.
   VAULT_USER            basic-auth user (rclone htpasswd)
   VAULT_PASS            basic-auth password
   VAULT_CA              CA bundle for a private-CA upstream
@@ -50,6 +54,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import re
 import ssl
 import sys
 import time
@@ -60,6 +65,10 @@ from typing import Optional, Tuple
 
 QUEUE = Path(os.environ.get("VAULT_QUEUE_DIR") or (Path.home() / ".claude" / "vault-queue"))
 UPSTREAM = os.environ.get("VAULT_UPSTREAM", "").rstrip("/")
+# Local delivery. Set to the vault's Inbox/Unprocessed to skip HTTP entirely on a
+# host where the vault is a local directory. Empty = HTTP, which is the default and
+# the only option on a laptop. Opt-in on purpose: see local_put().
+LOCAL_INBOX = os.environ.get("VAULT_LOCAL_INBOX", "")
 USER = os.environ.get("VAULT_USER", "")
 PASS = os.environ.get("VAULT_PASS", "")
 CA = os.environ.get("VAULT_CA", "")
@@ -100,6 +109,61 @@ def put(name: str, body: bytes) -> None:
     urllib.request.urlopen(req, timeout=TIMEOUT, context=ssl_ctx())
 
 
+# The filename contract, duplicated from the reverse proxy on purpose — and this
+# duplication is the whole cost of the local path, so it is worth naming. When
+# delivery goes over HTTP, the proxy owns three rules: this regex, PUT-only, and a
+# 10m body cap. Writing straight to the directory bypasses all three, so they are
+# re-enforced here. If the vhost's regex or cap ever changes, THIS MUST CHANGE
+# WITH IT.
+FNAME_RE = re.compile(r"^\d{20}-[0-9a-f]{12}\.md$")
+MAX_NOTE_BYTES = 10 * 1024 * 1024   # mirrors client_max_body_size 10m
+
+
+def local_put(name: str, body: bytes) -> None:
+    """Write the note straight into the vault inbox, skipping HTTP.
+
+    Only safe where the vault is a local directory. The containment the reverse
+    proxy and a container mount namespace provide for a REMOTE credential does not
+    apply here and is not needed: a local process that can write this directory
+    could do anything else on the box anyway. What we do still owe is the three
+    rules the proxy enforced, because the vault agent's processor trusts them.
+
+    Atomicity matters more than it looks. That processor polls, its scan reads the
+    file, and its validate step parses frontmatter — a half-written file fails to
+    parse and gets quarantined for review with an alarm. So: write a temp, then
+    rename. The temp MUST NOT end in .md, because the scan skips non-.md files and
+    would otherwise pick the partial one up mid-write.
+    """
+    if not FNAME_RE.match(name):
+        raise ValueError("refusing to write {!r}: violates the inbox filename contract".format(name))
+    if len(body) > MAX_NOTE_BYTES:
+        raise ValueError("refusing to write {}: {} bytes exceeds the {} cap".format(
+            name, len(body), MAX_NOTE_BYTES))
+
+    inbox = Path(LOCAL_INBOX).resolve()
+    dest = (inbox / name).resolve()
+    # Belt and braces: the regex already forbids a separator, but assert the
+    # resolved parent anyway so no future loosening of the regex turns into a
+    # traversal. The proxy got this from the mount namespace; we have to check.
+    if dest.parent != inbox:
+        raise ValueError("refusing to write outside the inbox: {}".format(dest))
+
+    tmp = inbox / (".{}.tmp".format(name))
+    with open(tmp, "wb") as fh:
+        fh.write(body)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, dest)   # atomic, and overwrites a replay exactly as PUT did
+
+
+def deliver(name: str, body: bytes) -> None:
+    """Local write when configured, HTTP otherwise."""
+    if LOCAL_INBOX:
+        local_put(name, body)
+    else:
+        put(name, body)
+
+
 def prune_sent(now: float) -> None:
     cutoff = now - SENT_RETAIN_DAYS * 86400
     try:
@@ -113,7 +177,7 @@ def prune_sent(now: float) -> None:
 def drain_once() -> Tuple[int, bool]:
     """Returns (delivered, healthy). healthy=False means the upstream looked down,
     so the caller should back off rather than hammer it."""
-    if not UPSTREAM:
+    if not UPSTREAM and not LOCAL_INBOX:
         return 0, False
     files = sorted(QUEUE.glob("*.md"))
     delivered = 0
@@ -124,7 +188,18 @@ def drain_once() -> Tuple[int, bool]:
         except OSError:
             continue  # mid-write; the .tmp -> rename makes this rare, skip the cycle
         try:
-            put(f.name, body)
+            deliver(f.name, body)
+        except ValueError as exc:
+            # Local-path contract violation (bad filename, oversized). This is the
+            # same class as an upstream 4xx — the note will never be accepted, so
+            # quarantine it rather than let one bad entry wedge the queue forever.
+            DEAD_DIR.mkdir(parents=True, exist_ok=True)
+            try:
+                f.rename(DEAD_DIR / f.name)
+            except OSError:
+                pass
+            log("{} -> dead/ ({})".format(f.name, exc))
+            continue
         except urllib.error.HTTPError as exc:
             if 400 <= exc.code < 500:
                 # Poison entry: quarantine so one bad note can't wedge the queue.
@@ -161,7 +236,12 @@ def status() -> int:
     over = (QUEUE / "OVER_CAP").exists()
 
     print("queue:    {}".format(QUEUE))
-    print("upstream: {}".format(UPSTREAM or "(unset — capturing only, not forwarding)"))
+    if LOCAL_INBOX:
+        writable = os.access(LOCAL_INBOX, os.W_OK)
+        print("delivery: LOCAL -> {}{}".format(
+            LOCAL_INBOX, "" if writable else "  <-- NOT WRITABLE, nothing will drain"))
+    else:
+        print("upstream: {}".format(UPSTREAM or "(unset — capturing only, not forwarding)"))
     print("pending:  {} note(s)".format(len(pending)))
     print("sent:     {} note(s) awaiting prune".format(len(sent)))
     print("dead:     {} note(s){}".format(len(dead), "  <-- NEEDS ATTENTION" if dead else ""))
