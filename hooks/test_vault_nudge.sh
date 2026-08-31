@@ -21,7 +21,7 @@ build_transcript() {
   local f=$1 n=$2 cmd=$3 extra=${4:-}
   : > "$f"
   echo '{"timestamp":"2026-07-20T19:00:00.000Z","message":{"role":"user","content":"go"}}' >> "$f"
-  for i in $(seq 1 "$n"); do
+  for _ in $(seq 1 "$n"); do
     python3 - "$f" "$cmd" <<'PY'
 import json,sys
 row={"timestamp":"2026-07-20T19:0%d:00.000Z"%0,"message":{"role":"assistant","content":[
@@ -54,6 +54,10 @@ out=$(run_hook "$TMP/quiet.jsonl" s-quiet)
   || bad "silent on a low-activity session" "got: $out"
 
 # --- silent when the session already wrote to the vault ---------------------
+# The tilde is literal on purpose -- this is the command string as it
+# actually appears in a transcript, and the hook greps for that text.
+# Expanding it to $HOME would test a string no real session produces.
+# shellcheck disable=SC2088
 build_transcript "$TMP/wrote.jsonl" 10 '~/.claude/bin/vault-write --type pattern --domain software --title x'
 out=$(run_hook "$TMP/wrote.jsonl" s-wrote)
 [ -z "$out" ] && ok "silent when the session already wrote a note" \

@@ -48,7 +48,8 @@ relevant.** Almost every decision below follows from that.
 │   └── thought-partner.md  Pressure-tests a decision before you commit.
 ├── commands/           Explicit slash-command entry points (whereami, safe-change, resume,
 │                        improve-loop, ledger, doc-sweep, edit, think, debug, ideate).
-├── hooks/              Deterministic automation wired into settings.json.
+├── hooks/              Deterministic automation wired into settings.json. Every hook
+│                      honours CLAUDE_HOOKS_OFF; guardrail.py deliberately does not.
 │   ├── session_start.sh   Injects host/git/docker context, an interrupted-session warning, queue health.
 │   ├── guardrail.py       Safety net over destructive commands (+ guardrail_rules.py, + tests).
 │   ├── checkpoint.py      Writes a resumable state file every turn (+ its test).
@@ -64,7 +65,8 @@ relevant.** Almost every decision below follows from that.
 │                        morph-recover-orphans (assemble traces for sessions that died),
 │                        repo-origin (who started a repo — the mainline gate's overlay),
 │                        otel-spooler (offline OTLP buffer), vault-write + vault-spooler
-│                        (queue notes offline, deliver on reconnect; + tests, + .service).
+│                        (queue notes offline, deliver on reconnect; + tests, + .service),
+│                        run-tests (every test in here at once; --lint adds ruff + shellcheck).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
 ├── settings.json       Wires the hooks + statusline.
 ├── checkpoints/        Per-session state.json + timeline.jsonl. Local, pruned at 14 days, unversioned.

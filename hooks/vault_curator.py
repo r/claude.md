@@ -177,7 +177,7 @@ def _action_summary(name: str, tool_input: Dict) -> str:
         return "{} {}".format(name, tool_input.get("file_path") or "")
     if name == "Read":
         return "Read {}".format(tool_input.get("file_path") or "")
-    keys = ",".join(sorted(k for k in tool_input.keys()))
+    keys = ",".join(sorted(tool_input))
     return "{}({})".format(name, keys)
 
 
@@ -497,7 +497,13 @@ def _spawn_detached(argv: List[str], sid: str) -> None:
     """Fire-and-forget. The parent hook must not wait on this."""
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        logf = open(LOG_DIR / ("{}.log".format(sid or "session")), "ab")
+        # noqa is honest here: SIM115 is syntactic and cannot see the
+        # `finally` below. A `with` block is the wrong shape -- the handle
+        # has to survive into Popen on the success path and be replaced by
+        # DEVNULL on the failure one.
+        logf = open(  # noqa: SIM115
+            LOG_DIR / ("{}.log".format(sid or "session")), "ab"
+        )
     except Exception:
         logf = subprocess.DEVNULL  # type: ignore[assignment]
     env = dict(os.environ)
@@ -514,6 +520,18 @@ def _spawn_detached(argv: List[str], sid: str) -> None:
         )
     except Exception:
         pass
+    finally:
+        # Popen dup()s the fd into the child, so the parent's handle is dead
+        # weight the moment the child exists -- and it stays open on the failure
+        # path too, where no child was ever spawned. This hook exits seconds
+        # later so nothing leaks in practice; close it anyway, because "the
+        # process exits soon" is the assumption that stops being true the first
+        # time someone calls this from a loop.
+        if hasattr(logf, "close"):
+            try:
+                logf.close()
+            except Exception:
+                pass
 
 
 def _nudge_fallback(mutating: int, domain_hint: str) -> None:

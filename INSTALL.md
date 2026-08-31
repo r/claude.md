@@ -116,12 +116,17 @@ docs/            ADOPTING.md — the 10-minute adoption walkthrough; OTEL.md —
 ## Verify the hooks work
 
 ```bash
-# guardrail unit tests (should print "ok — N guardrail cases passed")
-python3 ~/.claude/hooks/test_guardrail.py
+# every test in the config — offline, scratch dirs only, nothing live is touched
+~/.claude/bin/run-tests
 
-# morph-mirror tests (should print "ok — all morph-mirror cases passed")
-bash ~/.claude/bin/test_morph_mirror.sh
+# add the linters too, if you have ruff and/or shellcheck (both optional)
+~/.claude/bin/run-tests --lint
 ```
+
+That should end on `ok — N/N passed`. Run it after any edit to a hook: the whole point of a hook is
+that it's a guarantee rather than a request, and a guarantee nobody checks is a request again.
+Individual files still run on their own (`python3 ~/.claude/hooks/test_guardrail.py`) when you want
+one in isolation.
 
 A quick feel for the agency gate: in a scratch repo on `main`, `git push` *asks* (and tells the agent
 to branch off instead of stalling); `git commit` and feature-branch pushes sail through freely.

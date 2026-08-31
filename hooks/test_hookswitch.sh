@@ -142,9 +142,11 @@ missing=0
 for f in session_start.sh statusline.sh; do
   run "" "$f"; [ -z "$out" ] && missing=1
 done
-[ "$missing" -eq 0 ] \
-  && ok "an unset CLAUDE_HOOKS_OFF leaves hooks ON (fails in the safe direction)" \
-  || bad "an unset CLAUDE_HOOKS_OFF leaves hooks ON" "a hook was silent with no switch set"
+if [ "$missing" -eq 0 ]; then
+  ok "an unset CLAUDE_HOOKS_OFF leaves hooks ON (fails in the safe direction)"
+else
+  bad "an unset CLAUDE_HOOKS_OFF leaves hooks ON" "a hook was silent with no switch set"
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then

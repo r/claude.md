@@ -41,8 +41,12 @@ why it carries no dependency: a control that quietly switches itself off on a ma
 package is not a control. Confirm it's live:
 
 ```bash
-python3 ~/.claude/hooks/test_guardrail.py    # should print: ok — N guardrail cases passed
+~/.claude/bin/run-tests                      # should end on: ok — N/N passed
 ```
+
+That runs every test in the config, not just the guardrail's — offline, in scratch directories,
+touching nothing live. Add `--lint` if you have ruff or shellcheck installed; both are optional, and
+a missing one is reported and skipped rather than counted as a failure.
 
 ## 3. Customize `CLAUDE.md` — keep only the modes you work in
 

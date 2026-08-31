@@ -31,6 +31,12 @@ if command -v ruff >/dev/null 2>&1; then RUFF="ruff"
 elif command -v uv >/dev/null 2>&1; then RUFF="uv run ruff"
 else exit 0; fi
 
+# $RUFF is unquoted on purpose: it is either `ruff` or `uv run ruff`, and the
+# second one has to word-split into three argv entries. Quoting it looks tidier
+# and silently breaks the uv path, which is the only path on a machine that has
+# uv but no standalone ruff -- i.e. most of them.
+# shellcheck disable=SC2086
 timeout 30 $RUFF format "$file"    >/dev/null 2>&1
+# shellcheck disable=SC2086
 timeout 30 $RUFF check --fix "$file" >/dev/null 2>&1
 exit 0

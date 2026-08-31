@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+# run-tests — run every test in this config, and optionally lint it.
+#
+# WHY THIS EXISTS: there are eight test files across hooks/ and bin/, and until
+# this script there was nothing that ran them all. The docs named two of them.
+# So a regression in the other six was invisible until something broke in a
+# session, which is the exact failure mode this whole setup is built to avoid:
+# a guarantee nobody checks is a request.
+#
+# Everything here is offline, uses scratch directories, and touches no real repo
+# or live state. Safe to run anywhere, any time, including on a machine that has
+# only just been bootstrapped.
+#
+#   run-tests            # every test
+#   run-tests --lint     # every test, plus ruff + shellcheck if they are present
+#   run-tests --list     # names only, run nothing
+#
+# Exit 0 only if everything passed. Anything else is a real failure — this
+# script deliberately does NOT fail open, because unlike a hook it is not in the
+# path of a live session, and a test runner that shrugs is worse than none.
+set -u
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LINT=0
+LIST=0
+for arg in "$@"; do
+  case "$arg" in
+    --lint) LINT=1 ;;
+    --list) LIST=1 ;;
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "run-tests: unknown option '$arg' (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+pass=0; fail=0; failed=""
+
+# Tests are discovered, not listed, so a new test file is picked up by existing
+# it -- the same reason the hooks are wired by settings.json and not by memory.
+tests=""
+for d in hooks bin; do
+  for f in "$ROOT/$d"/test_*.py "$ROOT/$d"/test_*.sh; do
+    [ -f "$f" ] && tests="$tests $f"
+  done
+done
+
+if [ "$LIST" -eq 1 ]; then
+  for t in $tests; do echo "${t#"$ROOT"/}"; done
+  exit 0
+fi
+
+run_one() {
+  local t="$1" rel="${1#"$ROOT"/}" out rc start end
+  case "$t" in
+    *.py) start=$(date +%s); out=$(python3 "$t" 2>&1); rc=$? ;;
+    *.sh) start=$(date +%s); out=$(bash "$t" 2>&1); rc=$? ;;
+    *) return 0 ;;
+  esac
+  end=$(date +%s)
+  if [ "$rc" -eq 0 ]; then
+    printf '  ok   %-32s %ss\n' "$rel" "$((end - start))"
+    pass=$((pass + 1))
+  else
+    printf '  FAIL %-32s exit %s\n' "$rel" "$rc"
+    printf '%s\n' "$out" | sed 's/^/         /' | tail -25
+    fail=$((fail + 1))
+    failed="$failed $rel"
+  fi
+}
+
+echo "tests:"
+for t in $tests; do run_one "$t"; done
+
+if [ "$LINT" -eq 1 ]; then
+  echo
+  echo "lint:"
+  # Both linters are OPTIONAL and neither is a dependency of this config -- the
+  # hooks are stdlib-only and must stay runnable on a machine with neither. A
+  # missing linter is reported and skipped, never treated as a failure.
+  #
+  # There is deliberately no ruff.toml in this tree. py_autoformat.sh activates
+  # on any project that has one, so adding it here would make every future edit
+  # to a hook silently reformat it -- a ~1200-line rewrite of files whose git
+  # blame is the only record of why they are shaped the way they are. Lint here
+  # explicitly instead, and leave the formatter to projects that opted in.
+  #
+  # E702 is ignored: the spooler tests set up state with compact `a = x; b = y`
+  # lines on purpose, and reflowing them would make the fixture harder to read
+  # than the rule is worth.
+  #
+  # py38 is the floor on purpose: older hosts in a fleet still ship 3.8, and both
+  # guardrail.py and checkpoint.py carry scars from PEP 585/604 syntax that
+  # parsed fine on the dev box and crashed the hook everywhere else.
+  if command -v ruff >/dev/null 2>&1 || command -v uvx >/dev/null 2>&1; then
+    RUFF="ruff"; command -v ruff >/dev/null 2>&1 || RUFF="uvx ruff"
+    if $RUFF check --quiet --target-version py38 --line-length 100 \
+         --select E4,E7,E9,F,B,SIM118,SIM115 --ignore E702 "$ROOT/hooks" "$ROOT/bin" 2>/dev/null; then
+      echo "  ok   ruff"
+      pass=$((pass + 1))
+    else
+      echo "  FAIL ruff"
+      $RUFF check --target-version py38 --line-length 100 \
+        --select E4,E7,E9,F,B,SIM118,SIM115 --ignore E702 --output-format concise \
+        "$ROOT/hooks" "$ROOT/bin" 2>&1 | sed 's/^/         /' | tail -25
+      fail=$((fail + 1)); failed="$failed ruff"
+    fi
+  else
+    echo "  ·    ruff not installed — skipped"
+  fi
+
+  if command -v shellcheck >/dev/null 2>&1; then
+    # shellcheck disable=SC2046  # deliberate word splitting over the file list
+    if shellcheck --severity=warning $(ls "$ROOT"/hooks/*.sh "$ROOT"/bin/*.sh 2>/dev/null) \
+         "$ROOT/bin/morph-mirror" >/dev/null 2>&1; then
+      echo "  ok   shellcheck"
+      pass=$((pass + 1))
+    else
+      echo "  FAIL shellcheck"
+      # shellcheck disable=SC2046
+      shellcheck --severity=warning $(ls "$ROOT"/hooks/*.sh "$ROOT"/bin/*.sh 2>/dev/null) \
+        "$ROOT/bin/morph-mirror" 2>&1 | sed 's/^/         /' | tail -30
+      fail=$((fail + 1)); failed="$failed shellcheck"
+    fi
+  else
+    echo "  ·    shellcheck not installed — skipped"
+  fi
+fi
+
+echo
+if [ "$fail" -eq 0 ]; then
+  echo "ok — $pass/$pass passed"
+  exit 0
+fi
+echo "FAILED — $fail of $((pass + fail)):$failed"
+exit 1
