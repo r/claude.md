@@ -58,7 +58,6 @@
       "Bash(uptime)",
       "Bash(free:*)",
       "Bash(id)",
-      "Bash(env)",
       "Bash(docker ps:*)",
       "Bash(docker logs:*)",
       "Bash(docker inspect:*)",

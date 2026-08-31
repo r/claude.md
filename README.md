@@ -218,7 +218,7 @@ covering read-only and routine-local verbs, so the prompts that remain are the o
 something. What it deliberately *excludes* is the discipline: `ssh`, heredoc interpreters, `docker
 exec`, `rm`, `find`, `curl`, `git push`/`checkout`/`reset` all prompted and were all accepted every
 time, but allowlisting arbitrary-execution verbs is allowlisting everything and rebuilds the same
-problem one layer down. Note that an allow-rule only suppresses the *prompt* — the `guardrail` hook
+problem one layer down. `env` came off that list for a different reason: it is not arbitrary execution, it just prints every variable in the process — tokens included — straight into a transcript that gets read, cached and sometimes pasted. A read-only verb is not automatically a safe one. Note that an allow-rule only suppresses the *prompt* — the `guardrail` hook
 still inspects every command and can deny outright. Worth knowing before you try this: an agent
 cannot apply its own allowlist, because widening its own permission rules trips the auto-mode
 classifier's self-modification check. Correctly. Author the change, then apply it by hand.
