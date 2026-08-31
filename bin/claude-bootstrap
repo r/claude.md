@@ -158,18 +158,24 @@ if ! $DRY_RUN; then
 fi
 
 # Hooks and bin/ scripts are invoked as commands, so they MUST be executable. A
-# repo whose origin machine had core.fileMode=false (an NFS home, say) can record
-# them 100644 — and then every hook silently dies with "permission denied" here.
-# Cheap to reassert; expensive to debug.
+# fresh clone on a fileMode=true box (a Mac) checks each file out at the mode git
+# RECORDS, so we assert +x on exactly the files git tracks as 100755 — sufficient
+# and precise.
+#
+# We deliberately do NOT blind-glob hooks/*.py + bin/* the way this once did. That
+# over-reaches onto the non-executables (data modules like guardrail_rules.py,
+# tests, *.example) and, on a fileMode=true machine, leaves them mode-dirtied after
+# every run — a permanently "dirty" ~/.claude. Worse, it MASKED a real bug: a hook
+# committed 100644 (vault_curator.py) got silently +x'd here on every machine, so
+# nobody noticed the repo's recorded mode was wrong until a git tree exposed it.
+# Trusting git's mode surfaces that immediately. The contract is unchanged — a new
+# executable still needs `git update-index --chmod=+x` when it's added, and
+# bin/test_exec_bits.sh now fails the suite when one is missed.
 if ! $DRY_RUN; then
-  chmod +x "$CLAUDE_DIR"/hooks/*.sh "$CLAUDE_DIR"/hooks/*.py 2>/dev/null || true
-  # Glob bin/ rather than naming each script: the explicit list silently missed
-  # bin/morph-recover-orphans when it was added. Everything in bin/ is a script
-  # except the systemd unit, which must stay non-executable.
-  find "$CLAUDE_DIR/bin" -maxdepth 1 -type f ! -name '*.service' \
-       -exec chmod +x {} + 2>/dev/null || true
-  [ -f "$CLAUDE_DIR/skills/ask-zora/ask-zora" ] && chmod +x "$CLAUDE_DIR/skills/ask-zora/ask-zora"
-  ok "exec bits asserted on hooks/ and bin/"
+  git -C "$CLAUDE_DIR" ls-files -s \
+    | awk '$1=="100755"{sub(/^[^\t]*\t/,""); print}' \
+    | while IFS= read -r f; do chmod +x "$CLAUDE_DIR/$f" 2>/dev/null || true; done
+  ok "exec bits asserted from git's recorded modes (100755 files only)"
 fi
 
 # ── 4. certificates ──────────────────────────────────────────────────────────
