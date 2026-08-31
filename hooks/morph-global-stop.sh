@@ -59,6 +59,10 @@ transcript_path_str = payload.get("transcript_path") or ""
 conversation = payload.get("conversation") or []
 
 MAX_CONTENT_LEN = 2000
+# Bound every morph subprocess: this is a Stop hook, and a hung `morph` (a future
+# networked op, a wedged store) must never stall a session's exit. Local morph
+# ops finish in well under a second; 15s is generous headroom, not a wait budget.
+MORPH_TIMEOUT = 15
 now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 def truncate(s, limit=MAX_CONTENT_LEN):
@@ -233,7 +237,16 @@ except Exception as e:
     sys.exit(0)
 
 def run_morph(args):
-    return subprocess.run([morph_bin, *args], cwd=str(store), capture_output=True, text=True)
+    # Fail-open on a hang or a missing/broken binary: log and exit 0 rather than
+    # let TimeoutExpired/OSError escape as a traceback. A lost trace is fine; a
+    # Stop hook that stalls the session is not.
+    try:
+        return subprocess.run([morph_bin, *args], cwd=str(store),
+                              capture_output=True, text=True, timeout=MORPH_TIMEOUT)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        log("global-record.log", "ERR morph {} timed out/failed: {}".format(
+            args[0] if args else "?", e))
+        sys.exit(0)
 
 r = run_morph(["hash-object", str(trace_path)])
 if r.returncode != 0:
