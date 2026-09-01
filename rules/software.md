@@ -98,6 +98,16 @@ Instrument as you build, the way you test — not bolted on after an incident.
   ADR in `docs/decisions/` (context, the decision, **alternatives considered → rejected because…**,
   consequences). Comments explain *why* (stable), never restate *what* (rots). Don't delete a
   superseded ADR — mark it superseded. This is the "why" the LEDGER's experiment log doesn't hold.
+- **Knowledge that outlives the repo goes to the vault.** An ADR and a `LEDGER.md` entry stay with
+  their project; the lesson that *generalizes* past it — a pattern, a tool verdict — belongs in the
+  vault via `bin/vault-write`, with a pointer back to the repo. A **vault curator** (Stop hook)
+  handles this without interrupting you: at session end it fires a detached, least-agency `claude -p`
+  (on a small model) that reads a session digest and enqueues any durable notes on its own — the
+  judgment moved off your critical path. It's still curated ("nothing durable here" is a fine and
+  common outcome); set `VAULT_CURATOR=0` to fall back to a plain nudge instead. Each run ends its log
+  in `~/.claude/vault-curator/` with a reconciled verdict — how many notes actually reached the
+  queue, or that none did and why — so "the curator says it wrote three notes" and "three notes
+  exist" can't drift apart silently.
 
 ## Process loop (per change)
 1. Read the relevant spec / docs first.
@@ -140,6 +150,27 @@ mechanism exists to prevent.
 outward (deploy, package publish, release workflow, Pages), and any repo with another collaborator or
 a downstream consumer. Origin lifts "whose history is this," not "who feels it" — which is why this
 setup's own two repos are recorded `human` despite Claude having started them.
+
+## Morph — AI-native VCS mirror (opt-in per project)
+[Morph](https://r.github.io/morph/) runs alongside git in a project's `.morph/`, recording agent
+runs/traces and behavioral (test-metric) commits. Treat it as an **opt-in mirror layered on git**,
+never a replacement and never a hard dependency — this setup must work unchanged on a machine that
+has never heard of it.
+
+- **New project:** after `git init`, also `morph init && morph setup claude-code`. If morph isn't
+  installed, note it and carry on — it's a nudge to install, not a blocker.
+- **Committing in a morph project** (any repo with a top-level `.morph/`): a "commit" means git commit
+  **and** a morph mirror. Immediately after `git commit`, run `~/.claude/bin/morph-mirror "<the same
+  message>"`. This extends the atomic-commit rule — git and morph move together.
+- **Resilience is the whole point.** `morph-mirror` no-ops outside morph projects, **never fails the
+  git commit** (git stays source of truth), and on a machine missing the `morph` binary it warns with
+  an install nudge and exits clean. It resolves `morph` from PATH or a project-local
+  `<repo>/.tools/bin/morph`, and skips (rather than double-mirrors) when morph's own post-commit git
+  hook is installed. Tests: `bin/test_morph_mirror.sh` fakes `morph` on PATH, so every path is
+  covered without installing it.
+- **Status:** morph is alpha; git is authoritative. Reconciled against v0.48.3, where `morph commit
+  -m` needs no staging step and `morph init` installs git hooks that auto-mirror every git commit —
+  so `morph-mirror` is now a fallback for repos without those hooks rather than the primary path.
 
 ## Quality gate (unless the repo defines its own)
 ```bash
