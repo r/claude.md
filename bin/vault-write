@@ -64,6 +64,19 @@ CONFIDENCE = ["high", "medium", "low"]
 # pure infra. A wrong default files things silently; a required flag does not.
 DOMAINS = ["infra", "software"]
 
+# The prefixes the vault's router actually dispatches on. A key without one of
+# these is not a routing near-miss -- it is unroutable by construction, and the
+# note lands in the vault's review queue where it sits until a human reads it.
+# 29 notes had accumulated that way before this check existed, every one of them
+# because a caller passed --key with a bare slug.
+#
+# The trap is that the normalizer derives a key with an explicit --key taking
+# precedence FIRST, ahead of --project and --host. So passing --key does not
+# refine the derived key, it REPLACES it -- and a bare one silently discards the
+# prefix that --project/--host would have produced. Same reasoning as DOMAINS
+# above: a wrong default files things silently, a required shape does not.
+KEY_PREFIXES = ("host:", "service:", "network:", "project:")
+
 # Refuse to enqueue past this; the spooler enforces the same cap. Unlike the OTel
 # spooler we NEVER drop the oldest to make room — losing a metric is fine, losing
 # a decision record is not. Over cap is a loud failure, not a silent eviction.
@@ -96,14 +109,28 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--host", default=socket.gethostname())
     ap.add_argument("--confidence", default="high", choices=CONFIDENCE)
     ap.add_argument("--key", default="", help=(
-        "stable correlation key naming WHICH canonical note this belongs to, e.g. "
-        "'host:web-1', 'project:tally', 'runbook:vault-snapshot'. Survives edits, "
-        "unlike the content hash. Derived from --project/--host when omitted."))
+        "stable correlation key naming WHICH canonical note this belongs to. "
+        "MUST start with one of host: / service: / network: / project: -- e.g. "
+        "'host:web-1', 'project:tally', 'network:port-map'. Survives edits, "
+        "unlike the content hash. Derived from --project/--host when omitted, "
+        "and omitting it is usually right."))
     ap.add_argument("--source", default="", help="where this came from; defaults to cwd + session")
     ap.add_argument("--tags", default="", help="comma-separated")
     ap.add_argument("--body", default=None, help="body text; default reads stdin")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args(argv)
+
+    if args.key and not args.key.startswith(KEY_PREFIXES):
+        would = ("project:" + args.project) if args.project else (
+                ("host:" + args.host) if args.host else "")
+        ap.error(
+            "--key {!r} has no routing prefix, so the note would be unroutable and "
+            "would sit in the vault's review queue.\n"
+            "  Use one of: {}\n"
+            "  Omitting --key derives {!r} from --project/--host, which is usually "
+            "what you want.\n"
+            "  If this note really is its own canonical doc, name it e.g. {!r}.".format(
+                args.key, " ".join(KEY_PREFIXES), would, "project:" + args.key))
 
     body = args.body if args.body is not None else sys.stdin.read()
     body = body.strip()

@@ -98,7 +98,8 @@ bootstrap.profile.example
                  Template for the profile claude-bootstrap reads off your home host.
 skills/          Where your own skills go (see its README).
 docs/            ADOPTING.md — the 10-minute adoption walkthrough; OTEL.md — send Claude Code
-                 metrics to your own local backend (opt-in).
+                 metrics to your own local backend (opt-in); MIRRORING.md — only if you keep
+                 a private ~/.claude and publish a sanitized copy of it.
 ```
 
 ## After installing
