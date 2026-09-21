@@ -75,7 +75,7 @@ DOMAINS = ["infra", "software"]
 # refine the derived key, it REPLACES it -- and a bare one silently discards the
 # prefix that --project/--host would have produced. Same reasoning as DOMAINS
 # above: a wrong default files things silently, a required shape does not.
-KEY_PREFIXES = ("host:", "service:", "network:", "project:")
+KEY_PREFIXES = ("host:", "service:", "network:", "project:", "audit:")
 
 # Refuse to enqueue past this; the spooler enforces the same cap. Unlike the OTel
 # spooler we NEVER drop the oldest to make room — losing a metric is fine, losing
