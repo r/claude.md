@@ -67,3 +67,51 @@ Three things this shape teaches once you actually run it, all of which cost more
   what you mounted into its process. Verify against the server's own docs rather than assuming a
   per-user permission model exists, and prove the boundary with a negative test: attempt the
   traversal, then check the filesystem rather than trusting the status code.
+
+## A third pattern: one shared browser for an app with no API
+
+Some tools you want an agent to drive only exist as a web app. The author's setup has a skill
+that runs a design-to-build loop against one: the build agent writes a brief, the design app
+iterates, the agent pulls the result and keeps building. The skill is private, because it
+names machines. The shape underneath it is not:
+
+- **One broker, not one browser per session.** An MCP server over stdio starts once per agent
+  session, so a browser-backed one starts a browser per session. Run a single long-lived broker
+  instead, over streamable HTTP behind a bearer token. It holds the one logged-in session, and
+  every agent on the network shares it.
+- **Tabs are a cache, not state.** Everything durable lives on the app's servers, and a tab
+  reopens in a couple of seconds. The only moment a tab holds something you cannot get back is
+  while the app's own agent is working in it. So you never need a "done with this tab" signal.
+  Close freely outside a turn, never during one, and make the unit of work the project, not
+  the session.
+- **Read the turn off the app's own traffic, not the page.** DOM heuristics guess; the app's
+  network calls know. Here, a turn opens with a streaming Chat request and closes with the
+  page's own `ReleaseTurn`. Watch the gap between the two, because a retry or a verify phase
+  looks idle and is exactly when an eager cleanup kills a live run. Then add a silence
+  failsafe, so one lost event cannot pin a tab busy forever.
+- **Headless Chrome is caught by what it says, not what it lacks.** Stock headless sat on a
+  Cloudflare challenge indefinitely. The same browser passed once it sent headed Chrome's
+  user-agent, rewrote the one tell-tale client-hint brand on every target (cross-origin
+  iframes and workers included, via auto-attach), and set its screen size browser-wide. A
+  per-session screen override was undone the moment a second debugger attached. Headless
+  also used about 220 MB less than headed Chrome plus a virtual display. (Measured September
+  2026, Chrome 154, one tab on the same page.) Keep a switch back to headed: the detector
+  gets a vote too.
+- **Tell the agent, not a phone.** When the session dies, no push notification. Every tool
+  that needs the session goes through one gate, and the error it returns is written for the
+  agent: a human must log in, here are the exact steps, do not retry. The agent in front of
+  the human is the notification. Gate even the tools that never call the app's API: the
+  one that types into the page kept failing 30 seconds later as "selector missing", which
+  sent the agent after a UI change that never happened.
+- **Keep the token out of the MCP config.** Claude Code's `headersHelper` runs a command on
+  each connect and uses the headers it prints. The token stays in one file with the broker,
+  not in `.claude.json`.
+
+One trap to know before you wire any of this in: **register MCP servers from a plain shell,
+not from inside a Claude Code session.** A `claude mcp add` run by a session is answered by
+that live session. It reports "added", `claude mcp get` shows it connected, and nothing is
+written to disk.
+
+The caveat: an app with no API has not promised you anything. This works by driving
+its internal endpoints, so it breaks when they change, and it is only for your own account,
+within the app's terms.
