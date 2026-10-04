@@ -1,9 +1,11 @@
-# OpenTelemetry — send Claude Code metrics to your own local backend
+# OpenTelemetry — send Claude Code telemetry to your own local backend
 
-Claude Code can export **metrics** (cost, tokens, session count, active time) and **log events**
-(prompts, tool decisions, api requests/errors) over OTLP. This guide points it at a backend **you
-run**, with an optional local **spooler** so nothing is lost when that backend is offline (a laptop
-on the road, or the host being down). Nothing here uploads anywhere you don't control.
+Claude Code can export all three OTLP signals: **metrics** (cost, tokens, session count, active
+time), **log events** (prompts, tool decisions, api requests/errors), and **traces** — real
+distributed-tracing spans for a turn, so you can see where the wall-clock actually went. This guide
+points it at a backend **you run**, with an optional local **spooler** so nothing is lost when that
+backend is offline (a laptop on the road, or the host being down). Nothing here uploads anywhere you
+don't control.
 
 This is entirely opt-in. If you don't set the env below, Claude Code exports nothing.
 
@@ -25,10 +27,16 @@ a bearer token):
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
 export OTEL_METRICS_EXPORTER=otlp
 export OTEL_LOGS_EXPORTER=otlp
+export OTEL_TRACES_EXPORTER=otlp
 export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
 export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
 export OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative
 ```
+
+Each signal has its own exporter switch, and **they are independent** — a config with
+`OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER` but no `OTEL_TRACES_EXPORTER` exports metrics and
+logs normally while sending no spans at all. That failure is quiet: the backend is up, data is
+flowing, the traces view is just empty. If you want spans, set the third var.
 
 Source it from your shell startup file so every `claude` you launch inherits it:
 
@@ -45,7 +53,7 @@ exec bash -l && echo "$CLAUDE_CODE_ENABLE_TELEMETRY"
 Any OTLP/HTTP backend works — e.g. the all-in-one [`grafana/otel-lgtm`](https://github.com/grafana/docker-otel-lgtm)
 container (OTel Collector + Prometheus + Loki + Grafana) is the lowest-friction local option.
 
-### Three gotchas that will otherwise silently drop data
+### Gotchas that will otherwise silently drop data
 - **Settings-JSON `env` does not enable telemetry** — see above. Use the shell environment.
 - **`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative`** — Prometheus's OTLP receiver
   rejects *delta* temporality. Without this, metrics fail to export (logs are unaffected). It's in the
@@ -56,6 +64,32 @@ container (OTel Collector + Prometheus + Loki + Grafana) is the lowest-friction 
 - **Auth:** Claude Code sends `OTEL_EXPORTER_OTLP_HEADERS` (e.g.
   `export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"`) but does **not** present a client
   cert (no mTLS from the exporter). Gate a remote endpoint with a bearer token over TLS.
+- **Traces need a trace store**, which metrics and logs don't. Prometheus and Loki won't hold spans;
+  you need Tempo or Jaeger behind the collector. `grafana/otel-lgtm` bundles Tempo, so it works out
+  of the box — but a hand-rolled Prometheus-plus-Loki stack will accept the OTLP POST and drop the
+  spans on the floor.
+
+### What the spans look like
+
+Claude Code emits them under the tracer `com.anthropic.claude_code.tracing`, with `service.name`
+defaulting to `claude-code`:
+
+| Span | What it covers |
+|------|----------------|
+| `claude_code.interaction` | The root span — one user turn, end to end |
+| `claude_code.llm_request` | A single model call |
+| `claude_code.tool` / `.tool.execution` | A tool call, and the execution inside it |
+| `claude_code.tool.blocked_on_user` | Time parked waiting on a permission prompt |
+| `claude_code.subagent.spawn` | A subagent launch |
+| `claude_code.hook` | A hook firing |
+
+That last one is the reason to turn traces on: `blocked_on_user` separates *your* thinking time from
+the machine's, so "that turn took four minutes" resolves into how much was model, how much was tool
+execution, and how much was the turn sitting idle waiting for you to approve something.
+
+Claude Code also honours a `TRACEPARENT` (and `TRACESTATE`) environment variable, so a session
+launched from an outer traced process attaches to that trace instead of starting a new one — useful
+if you drive Claude from CI or a wrapper script that's already instrumented.
 
 ## 2. Optional: the offline spooler (`bin/otel-spooler.py`)
 
