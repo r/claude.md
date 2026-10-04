@@ -9,6 +9,9 @@ don't control.
 
 This is entirely opt-in. If you don't set the env below, Claude Code exports nothing.
 
+This is the write half. To read it back from a session (what ran, what was blocked, what it cost),
+see [OTEL-QUERY.md](OTEL-QUERY.md).
+
 ## 1. Point Claude Code at a collector
 
 **The telemetry vars must live in the environment Claude Code inherits at launch — not only in
