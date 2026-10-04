@@ -4,20 +4,21 @@ A portable, de-personalized [Claude Code](https://code.claude.com) global setup.
 and **Linux**. See `README.md` for what each piece does and *why*; `docs/ADOPTING.md` is the
 step-by-step guide to making it yours.
 
-## Quick install
+## Install
 
 ```bash
-unzip claude-config.zip
-cd claude-portable
-./install.sh
+git clone https://github.com/r/claude.md claude-setup
+./claude-setup/install.sh
 ```
 
-(Or clone the repo and run `./install.sh` from its root — the zip is just `git archive` of the repo.)
+That is the only install path. `install.sh` copies the authored config into `~/.claude`, backing up
+anything it would overwrite into `~/.claude/.backup-<timestamp>/`. It **never** touches runtime state
+(`projects/`, `sessions/`, `history.jsonl`, caches, credentials) if a `~/.claude` already exists, and
+it never overwrites a `rules/infra.md` or `rules/voice.md` you have already personalized — it only
+seeds them from the `.example` templates when they are absent. Re-running it is safe. It ends with a
+preflight report of which optional tools are present.
 
-`install.sh` copies the authored config into `~/.claude`, backing up anything it would overwrite into
-`~/.claude/.backup-<timestamp>/`. It **never** touches runtime state (`projects/`, `sessions/`,
-`history.jsonl`, caches, credentials) if a `~/.claude` already exists. It ends with a preflight report
-of which optional tools are present.
+What gets installed, and what each piece is for, is the inventory in [README.md](README.md).
 
 Install somewhere other than `~/.claude`:
 
@@ -54,7 +55,9 @@ Three properties worth knowing, because they're the reason it exists:
   Claude at the local spooler instead, which buffers to bounded disk and replays on reconnect — so a
   laptop that's only sometimes on your network (or VPN) loses nothing.
 - **Idempotent, and it backs up whatever it replaces.** Re-running is safe. `--dry-run` prints the
-  full plan and changes nothing; `--no-otel` / `--no-zora` skip either half.
+  full plan and changes nothing; `--no-otel` / `--no-agent` skip either half (the second half is the
+  mTLS client cert and `agent.env` for a personal agent you run yourself; most people have no such
+  thing and skip it).
 
 The secrets never touch an intermediate disk: they're pulled over SSH at install time, written `600`,
 and the profile is `eval`'d in-process rather than copied down.
@@ -78,41 +81,18 @@ and, being fail-open, silently allowed every destructive command. A safety contr
 (`hooks/guardrail_rules.py`). The prerequisite that still changes *safety* rather than convenience is
 therefore **python3** itself: without it the guardrail doesn't run at all.
 
-## What's here
-
-```
-CLAUDE.md        Always-loaded global doctrine. EDIT THIS FIRST — make it yours.
-settings.json    Wires the hooks + status line (paths use $HOME, so no editing needed).
-rules/           software.md, loops.md, knowledge-work.md, prerelease.md, plus two templates you
-                 personalize:
-                 infra.md.example (host map + safe-change) and voice.md.example (your prose voice).
-commands/        Slash commands: /whereami /safe-change /resume /improve-loop /ledger /doc-sweep
-                 /edit /think.
-agents/          doc-steward, infra-reviewer, editor, thought-partner.
-hooks/           session_start, guardrail (+rules +tests), py_autoformat, statusline, doc_drift,
-                 vault_curator (+ vault_nudge fallback, +tests), morph-global-{prompt,stop}
-                 (opt-in: record every session — see below).
-bin/             claude-bootstrap (set up a second machine — see above), morph-mirror (+ its test),
-                 otel-spooler (offline OTLP buffer — see docs/OTEL.md) + its systemd unit.
-bootstrap.profile.example
-                 Template for the profile claude-bootstrap reads off your home host.
-skills/          Where your own skills go (see its README).
-docs/            ADOPTING.md — the 10-minute adoption walkthrough; OTEL.md — send Claude Code
-                 metrics to your own local backend (opt-in); MIRRORING.md — only if you keep
-                 a private ~/.claude and publish a sanitized copy of it.
-```
-
 ## After installing
 
 1. **Edit `~/.claude/CLAUDE.md`** — it's written in a neutral voice but encodes one person's
    preferences. Make it match how you work.
-2. **Copy the templates you'll use:** `rules/infra.md.example → rules/infra.md` (fill in your host
-   map) if you do infra/ops work; `rules/voice.md.example → rules/voice.md` (codify your writing
-   voice) if you'll use `/edit`. Delete what you don't need.
+2. **Fill in the seeded templates:** `rules/infra.md` (your host map) if you do infra/ops work;
+   `rules/voice.md` (your writing voice) if you'll use `/edit`. Delete what you don't need.
 3. Open a new Claude Code session. The status line (`host │ dir ⎇ branch │ model`) and the
    session-start banner confirm the hooks are live.
 4. To version your `~/.claude`, the included `.gitignore` uses a whitelist model that tracks only the
    authored config and excludes all secrets, history, and session state: `cd ~/.claude && git init`.
+
+The full personalization walkthrough is [docs/ADOPTING.md](docs/ADOPTING.md).
 
 ## Verify the hooks work
 
@@ -149,15 +129,30 @@ From then on, browse sessions with `morph session list` / `morph session show --
 To turn it off, remove `~/.claude/morph-traces` (or the two hooks from `settings.json`). Everything
 stays local — nothing is uploaded.
 
+## Optional: run the vault spooler as a background service
+
+`bin/vault-spooler.py` drains `~/.claude/vault-queue/` (notes captured offline) to your vault
+endpoint; see the README for what it is and `bin/vault-spooler.env.example` for its config. Running it
+by hand works, but a queue that nothing drains is the failure mode to avoid, so both platforms ship a
+service definition:
+
+- **Linux (systemd user unit):** `bin/vault-spooler.service` — its header is the install recipe.
+- **macOS (launchd user agent):** `bin/vault-spooler.plist.example` plus `bin/vault-spooler-run.sh`.
+  launchd cannot read an `EnvironmentFile`, so the plist calls the wrapper script, which sources
+  `~/.config/vault-spooler.env` (`chmod 600`) and execs the spooler — credentials never land in the
+  plist. Install:
+
+  ```bash
+  sed "s|__HOME__|$HOME|g" ~/.claude/bin/vault-spooler.plist.example \
+    > ~/Library/LaunchAgents/local.vault-spooler.plist
+  launchctl load -w ~/Library/LaunchAgents/local.vault-spooler.plist
+  bash ~/.claude/bin/vault-spooler-run.sh --status      # health check
+  ```
+
+  The plist's header explains how to read its exit status (a nonzero last-exit while off-network is
+  "retained, will retry", not breakage) and the one-line rollback.
+
 ## Uninstall / roll back
 
 Everything overwritten is in `~/.claude/.backup-<timestamp>/`. Move it back, or delete the installed
 config files. Runtime state was never modified.
-
-## Regenerating the downloadable zip (maintainers)
-
-```bash
-git archive --format=zip --prefix=claude-portable/ -o claude-config.zip HEAD
-```
-
-`.gitattributes` marks the blog notes as `export-ignore`, so the archive contains only the config.

@@ -12,8 +12,8 @@
 # the script, the script itself is safe to publish.
 #
 # Only CLAUDE_REPO and CA_CHAIN are strictly required. Omit the OTEL_* block to
-# skip telemetry; omit the ZORA_* block (or the CA_GEN/CA_*_DIR paths) to skip
-# the mTLS bridge.
+# skip telemetry; omit the AGENT_* block (or the CA_GEN/CA_*_DIR paths) to skip
+# the mTLS bridge to a personal agent.
 
 # ── config repo ──────────────────────────────────────────────────────────────
 # Your ~/.claude repo. The whitelist .gitignore means only authored config is
@@ -39,7 +39,15 @@ CA_KEY_DIR=/home/you/ca/intermediate/private
 OTEL_UPSTREAM=https://otel-ingest.example.internal
 OTEL_TOKEN=replace-with-your-bearer-token
 
-# ── agent bridge (optional) ──────────────────────────────────────────────────
-ZORA_URL=https://agent.example.internal:8643/v1
-ZORA_KEY=replace-with-your-api-key
-ZORA_MODEL=hermes-agent
+# ── personal agent bridge (optional) ─────────────────────────────────────────
+# An agent you run yourself, reached over mTLS with the per-machine client cert.
+# claude-bootstrap writes these into ~/.claude/agent.env (chmod 600, gitignored).
+AGENT_URL=https://agent.example.internal:8643/v1
+AGENT_KEY=replace-with-your-api-key
+# Model id your endpoint expects. `hermes-agent` is an upstream product id (Nous
+# Research's agent runtime), shown here only as an example — use your own.
+AGENT_MODEL=hermes-agent
+# The skill that wraps the bridge, used to verify it after install:
+# ~/.claude/skills/<AGENT_SKILL>/<AGENT_SKILL> takes a prompt and prints the
+# reply. Optional; without one the bridge is written but not exercised.
+AGENT_SKILL=ask-agent

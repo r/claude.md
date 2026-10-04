@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd USER agent for the vault spooler — the macOS counterpart to
+  vault-spooler.service. STAGED, NOT INSTALLED: copy it into place only when you
+  want the Mac draining on its own.
+
+    sed "s|__HOME__|$HOME|g" ~/.claude/bin/vault-spooler.plist.example \
+      > ~/Library/LaunchAgents/local.vault-spooler.plist
+    launchctl load -w ~/Library/LaunchAgents/local.vault-spooler.plist
+
+  launchd has no %h, unlike the systemd unit next door, so the paths below are
+  absolute and __HOME__ is substituted at install time rather than shipped
+  pointing at whoever built it.
+
+  Rollback, complete and immediate:
+    launchctl unload -w ~/Library/LaunchAgents/local.vault-spooler.plist
+    rm ~/Library/LaunchAgents/local.vault-spooler.plist
+
+  Health:  bash ~/.claude/bin/vault-spooler-run.sh --status
+
+  READING ITS STATUS. `launchctl list` will show last-exit 1 whenever the Mac is
+  away from home, and that is not breakage: --once returns `0 if healthy or
+  delivered else 1`, so 1 means "upstream was unreachable, everything retained".
+  Expect it off-LAN. The real health signal is the `dead:` count from --status --
+  that one means a note was REJECTED and needs a human. A StartInterval job is
+  not throttled or disabled by a nonzero exit, so it keeps retrying on schedule.
+
+  It calls the wrapper, not the spooler, so credentials stay in the 0600 env
+  file and never land in this plist — a plist is world-readable by default.
+
+  KeepAlive is deliberately absent. The spooler exits 0 when it has nothing to
+  forward, and KeepAlive would turn that clean exit into a restart loop, which
+  is the same trap vault-spooler.service documents for Restart=always. This runs
+  on an interval instead: every 10 minutes, and once at load.
+
+  What it can do if forgotten: PUT already-queued notes into a staging inbox a
+  human reviews. The queue is bounded and refuses at enqueue rather than
+  evicting, so this cannot grow a disk or delete anything.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>              <string>local.vault-spooler</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__HOME__/.claude/bin/vault-spooler-run.sh</string>
+        <string>--once</string>
+    </array>
+    <key>RunAtLoad</key>          <true/>
+    <key>StartInterval</key>      <integer>600</integer>
+    <key>StandardOutPath</key>    <string>__HOME__/.claude/vault-queue/spooler.log</string>
+    <key>StandardErrorPath</key>  <string>__HOME__/.claude/vault-queue/spooler.log</string>
+</dict>
+</plist>

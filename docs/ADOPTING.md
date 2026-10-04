@@ -1,54 +1,26 @@
 # Adopting this setup
 
-A 10-minute path from clone to a working, personalized `~/.claude`. Read the
-[README](../README.md) first for the *why*; this is the *how*.
+A 10-minute path from a fresh install to a `~/.claude` that is yours. Read the
+[README](../README.md) first for the *why*; this is the *how* of personalizing it. Installing,
+prerequisites, and verification are [INSTALL.md](../INSTALL.md)'s job and are not repeated here.
 
-## 1. Get the files into `~/.claude`
+## 1. Install
 
-If you don't already have a `~/.claude` you care about:
-
-```bash
-git clone https://github.com/r/claude.md ~/.claude
-```
-
-If you already have a `~/.claude`, don't clobber it — clone elsewhere and copy in the pieces you want:
-
-```bash
-git clone https://github.com/r/claude.md /tmp/claude-setup
-# then copy over the parts you want, e.g.:
-cp -r /tmp/claude-setup/{rules,agents,commands,hooks,bin} ~/.claude/
-cp /tmp/claude-setup/settings.json ~/.claude/settings.json   # review first if you have one
-```
-
-Make the hooks and scripts executable:
-
-```bash
-chmod +x ~/.claude/hooks/*.sh ~/.claude/hooks/guardrail.py ~/.claude/bin/*
-```
-
-## 2. Wire up `settings.json`
-
-`settings.json` registers the hooks and the status line using `$HOME/.claude/...` paths. If your
-Claude Code build doesn't expand `$HOME` in hook command strings, replace it with your absolute home
-path. Then start a new Claude Code session and confirm:
+Run `install.sh` as [INSTALL.md](../INSTALL.md) describes — `git clone` the repo, then
+`./install.sh`. It copies the authored config into `~/.claude`, backs up anything it replaces, leaves
+runtime state alone, sets the exec bits, and seeds `rules/infra.md` and `rules/voice.md` from their
+`.example` templates if you don't already have them. Then start a new Claude Code session and
+confirm:
 
 - the **status line** shows `host │ dir ⎇ branch │ model`, and
 - a **session-start banner** names your host, directory, and git/docker state.
 
-The `guardrail.py` hook needs Python 3 and nothing else — it's stdlib-only, so there's nothing to pip
-install. It **fails open** by design (a bug in it must never block every tool call), which is exactly
-why it carries no dependency: a control that quietly switches itself off on a machine that's missing a
-package is not a control. Confirm it's live:
+If neither appears, the hook paths in `settings.json` are the first thing to check: they use
+`$HOME/.claude/...`, and a Claude Code build that doesn't expand `$HOME` in hook command strings
+needs the absolute home path instead. The test suite and what it proves are under *Verify the hooks
+work* in INSTALL.md.
 
-```bash
-~/.claude/bin/run-tests                      # should end on: ok — N/N passed
-```
-
-That runs every test in the config, not just the guardrail's — offline, in scratch directories,
-touching nothing live. Add `--lint` if you have ruff or shellcheck installed; both are optional, and
-a missing one is reported and skipped rather than counted as a failure.
-
-## 3. Customize `CLAUDE.md` — keep only the modes you work in
+## 2. Customize `CLAUDE.md` — keep only the modes you work in
 
 `CLAUDE.md` is always loaded, so it's the most valuable context to keep lean. Edit it:
 
@@ -56,13 +28,14 @@ a missing one is reported and skipped rather than counted as a failure.
 - The "how I work", "never do these", secrets, and continuity sections are general — keep them, tune
   the wording to your taste.
 
-## 4. Fill in the `.example` templates
+## 3. Fill in the templates
 
-Two rules ship as templates because they're inherently personal. Copy each and make it yours:
+Two rules ship as `.example` templates because they're inherently personal. `install.sh` seeded
+working copies for you; if you installed by hand, copy them yourself:
 
 ```bash
-cp ~/.claude/rules/voice.md.example ~/.claude/rules/voice.md
-cp ~/.claude/rules/infra.md.example ~/.claude/rules/infra.md
+cp -n ~/.claude/rules/voice.md.example ~/.claude/rules/voice.md
+cp -n ~/.claude/rules/infra.md.example ~/.claude/rules/infra.md
 ```
 
 - **`voice.md`** — your writing voice, so the `editor` agent drafts and critiques as *you*. The best
@@ -74,7 +47,7 @@ cp ~/.claude/rules/infra.md.example ~/.claude/rules/infra.md
 `rules/software.md` is an *example* stack doctrine (Python/`uv`/`ruff`/`mypy`). Replace the stack
 details with yours, or delete it. Keep the shape: a short house style plus a hard quality gate.
 
-## 5. Try each mechanism once
+## 4. Try each mechanism once
 
 - **A command:** type `/whereami` — read-only, confirms host/git/docker.
 - **The knowledge-work agents:** `/edit` a paragraph of your writing, or `/think` a decision you're
@@ -88,7 +61,7 @@ details with yours, or delete it. Keep the shape: a short house style plus a har
 - **A loop (software only):** `/improve-loop` against a measurable target sets up a checker-first,
   keep-or-rollback loop on a throwaway branch. Read `rules/loops.md` first.
 
-## 6. Version your own config (optional)
+## 5. Version your own config (optional)
 
 The `.gitignore` uses a whitelist model: it tracks only the authored config and keeps all secrets,
 history, and transcripts out — so you can safely `git init` your `~/.claude` and push it to a
@@ -101,14 +74,6 @@ private repo.
 Anything here can be disabled in `settings.json` (remove a hook) or by starting Claude Code with
 `--safe-mode`. The tools *suggest and review*; you decide what actually happens.
 
-For a single session — when a hook is misbehaving and you want to run without it rather than edit
-your config — every hook honours `CLAUDE_HOOKS_OFF`, a comma-separated list of hook ids or `all`:
-
-```bash
-CLAUDE_HOOKS_OFF=doc_drift,morph claude
-```
-
-Ids are the filename without its extension, `-` written as `_`. Matching is exact, and an unset or
-misspelled value leaves the hooks **on**. `guardrail.py` is the one exception: it has no switch and
-naming it does nothing, because a safety control an env var can disarm is not a safety control —
-see the README. To remove that one you edit `settings.json`, deliberately and in a commit.
+For a single session, every hook except the guardrail honours `CLAUDE_HOOKS_OFF` — the ids, the
+matching rules, and why the guardrail is exempt are under *Turning a hook off* in the
+[README](../README.md).

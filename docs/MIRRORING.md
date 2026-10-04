@@ -30,9 +30,14 @@ the cheapest moment to notice something should not be public is *before* it is.
    repo's own wording.
 
 3. **Check for drift.** Compare the two copies of anything that exists in both
-   — `bin/`, `hooks/`, `settings.json` — and confirm the only differences are
-   the sanitized ones you intended. A file present in both is the thing that
-   drifts; a file present in only one cannot.
+   — `bin/`, `hooks/`, `settings.json`, `README.md`, `rules/`, `agents/`,
+   `commands/` — and confirm the only differences are the sanitized ones you
+   intended. A file present in both is the thing that drifts; a file present in
+   only one cannot. Check the prose, not just the code: a README paragraph, a
+   rule, or an agent's instructions drifts exactly the way a script does, and
+   every one of those directories has been found behind at least once. The
+   diff is the same `diff -r` either way; the mistake is only comparing the
+   executable half.
 
 4. **Scan for leaks before pushing.** Both repos run pre-commit hooks that grep
    for credential shapes. Beyond secrets, the recurring leaks in a mirror like

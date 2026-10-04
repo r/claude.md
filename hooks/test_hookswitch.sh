@@ -2,8 +2,10 @@
 # Regression test: CLAUDE_HOOKS_OFF silences the hook it names, and CANNOT
 # silence the guardrail.
 #
-# Why this exists at all: the switch is three duplicated lines in nine files,
-# and the failure mode of a kill switch is silent in both directions. A typo in
+# Why this exists at all: the switch is three duplicated lines in each of the
+# nine switchable hooks (the list in `switchable` below; guardrail.py is the
+# tenth hook and deliberately has no switch), and the failure mode of a kill
+# switch is silent in both directions. A typo in
 # one hook's `case` pattern leaves that hook running when you asked it to stop —
 # annoying. A stray `guardrail` in the pattern list disarms the deterministic
 # half of the "never do these" list with nothing in the transcript to say so —

@@ -27,7 +27,7 @@ umask 077
 FROM=""
 DRY_RUN=false
 FORCE_CERT=false
-WITH_ZORA=true
+WITH_AGENT=true
 WITH_OTEL=true
 CLAUDE_DIR="${CLAUDE_DIR:-$HOME/.claude}"
 PROFILE_PATH="${PROFILE_PATH:-.claude-bootstrap.profile}"
@@ -38,7 +38,7 @@ Usage: claude-bootstrap --from USER@HOST [options]
 
   --from USER@HOST   Home host holding the bootstrap profile + CA. Required.
   --profile PATH     Profile path on the home host (default: .claude-bootstrap.profile)
-  --no-zora          Skip the Zora mTLS client cert + zora.env
+  --no-agent         Skip the personal-agent mTLS client cert + agent.env
   --no-otel          Skip the telemetry spooler + otel.env
   --force-cert       Re-mint this machine's client cert even if one exists
   --dry-run          Print what would happen; change nothing
@@ -53,7 +53,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --from) FROM="${2:-}"; shift 2 ;;
     --profile) PROFILE_PATH="${2:-}"; shift 2 ;;
-    --no-zora) WITH_ZORA=false; shift ;;
+    --no-agent) WITH_AGENT=false; shift ;;
     --no-otel) WITH_OTEL=false; shift ;;
     --force-cert) FORCE_CERT=true; shift ;;
     --dry-run) DRY_RUN=true; shift ;;
@@ -194,8 +194,8 @@ else
   ok "CA chain -> $TLS_DIR/ca-chain.pem"
 fi
 
-if $WITH_ZORA; then
-  : "${CA_GEN:?profile must set CA_GEN to enable Zora (path to generate-client-certificate.sh)}"
+if $WITH_AGENT; then
+  : "${CA_GEN:?profile must set CA_GEN to enable the agent bridge (path to generate-client-certificate.sh)}"
   : "${CA_CERT_DIR:?profile must set CA_CERT_DIR}"
   : "${CA_KEY_DIR:?profile must set CA_KEY_DIR}"
 
@@ -320,19 +320,23 @@ EOF
   fi
 fi
 
-# ── 6. Zora ──────────────────────────────────────────────────────────────────
-if $WITH_ZORA && [ -n "${ZORA_URL:-}" ]; then
-  : "${ZORA_KEY:?profile must set ZORA_KEY to enable Zora}"
-  say "zora"
-  write600 "$CLAUDE_DIR/zora.env" <<EOF
-# A2A bridge to Zora. Gitignored — never commit.
+# ── 6. personal agent bridge ─────────────────────────────────────────────────
+# Optional: an agent you run yourself (an A2A/OpenAI-compatible endpoint behind
+# mTLS). Skipped entirely when the profile sets no AGENT_URL.
+if $WITH_AGENT && [ -n "${AGENT_URL:-}" ]; then
+  : "${AGENT_KEY:?profile must set AGENT_KEY to enable the agent bridge}"
+  say "agent bridge"
+  write600 "$CLAUDE_DIR/agent.env" <<EOF
+# mTLS bridge to your personal agent. Gitignored — never commit.
 # Client cert is THIS MACHINE'S ($CLIENT_NAME) — revoke it alone if lost.
-ZORA_URL=$ZORA_URL
-ZORA_KEY=$ZORA_KEY
-ZORA_MODEL=${ZORA_MODEL:-hermes-agent}
-ZORA_CACERT=$TLS_DIR/ca-chain.pem
-ZORA_CLIENT_CERT=$TLS_DIR/$CLIENT_NAME.pem
-ZORA_CLIENT_KEY=$TLS_DIR/$CLIENT_NAME.key.pem
+AGENT_URL=$AGENT_URL
+AGENT_KEY=$AGENT_KEY
+# Model id the endpoint expects. The default is an upstream product id
+# (Nous Research's hermes-agent); set AGENT_MODEL in the profile for yours.
+AGENT_MODEL=${AGENT_MODEL:-hermes-agent}
+AGENT_CACERT=$TLS_DIR/ca-chain.pem
+AGENT_CLIENT_CERT=$TLS_DIR/$CLIENT_NAME.pem
+AGENT_CLIENT_KEY=$TLS_DIR/$CLIENT_NAME.key.pem
 EOF
 fi
 
@@ -379,13 +383,21 @@ if $WITH_OTEL; then
   fi
 fi
 
-if $WITH_ZORA && [ -n "${ZORA_URL:-}" ]; then
-  if [ -x "$CLAUDE_DIR/skills/ask-zora/ask-zora" ]; then
-    if "$CLAUDE_DIR/skills/ask-zora/ask-zora" "reply with exactly: bootstrap ok" >/dev/null 2>&1; then
-      ok "zora mTLS bridge answered — client cert accepted"
+# The bridge is exercised through whatever skill wraps it: skills/<AGENT_SKILL>/
+# <AGENT_SKILL>, an executable that takes a prompt and prints the reply. The
+# name comes from the profile (AGENT_SKILL, default ask-agent); no such skill
+# means nothing to verify, not a failure.
+if $WITH_AGENT && [ -n "${AGENT_URL:-}" ]; then
+  AGENT_SKILL="${AGENT_SKILL:-ask-agent}"
+  AGENT_SKILL_BIN="$CLAUDE_DIR/skills/$AGENT_SKILL/$AGENT_SKILL"
+  if [ -x "$AGENT_SKILL_BIN" ]; then
+    if "$AGENT_SKILL_BIN" "reply with exactly: bootstrap ok" >/dev/null 2>&1; then
+      ok "agent mTLS bridge answered via skills/$AGENT_SKILL — client cert accepted"
     else
-      warn "zora did not answer (off-network, or the CA/cert path is wrong)"
+      warn "agent did not answer via skills/$AGENT_SKILL (off-network, or the CA/cert path is wrong)"
     fi
+  else
+    ok "agent.env written; no skills/$AGENT_SKILL skill to exercise it with (set AGENT_SKILL in the profile if yours is named differently)"
   fi
 fi
 

@@ -46,7 +46,7 @@ relevant.** Almost every decision below follows from that.
 │   ├── editor.md           Voice-aware structural + line editor for prose.
 │   ├── infra-reviewer.md   Pre-flight review of infra changes.
 │   └── thought-partner.md  Pressure-tests a decision before you commit.
-├── commands/           Explicit slash-command entry points (whereami, safe-change, resume,
+├── commands/           Explicit slash-command entry points (whereami, safe-change, resume, autopilot,
 │                        improve-loop, ledger, doc-sweep, edit, think, debug, ideate).
 ├── hooks/              Deterministic automation wired into settings.json. Every hook
 │                      honours CLAUDE_HOOKS_OFF; guardrail.py deliberately does not.
@@ -65,7 +65,7 @@ relevant.** Almost every decision below follows from that.
 │                        morph-recover-orphans (assemble traces for sessions that died),
 │                        repo-origin (who started a repo — the mainline gate's overlay),
 │                        otel-spooler (offline OTLP buffer), vault-write + vault-spooler
-│                        (queue notes offline, deliver on reconnect; + tests, + .service),
+│                        (queue notes offline, deliver on reconnect; + tests, + systemd/launchd units),
 │                        run-tests (every test in here at once; --lint adds ruff + shellcheck).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
 ├── settings.json       Wires the hooks + statusline.
@@ -87,6 +87,7 @@ and agents are *not* typed — rules auto-load when the work touches them, agent
 | `/whereami` | `/whereami` | Report current host / git / docker context so you don't act on the wrong machine. |
 | `/resume` | `/resume` | Reconstruct what you were doing and where you left off — no action yet. |
 | `/safe-change` | `/safe-change <what you're changing>` | Walk an infra change through the staged, reversible, observe-first protocol. |
+| `/autopilot` | `/autopilot <task>` | Hand the session over: work hands-off until done, queue every gated item in `NEEDS-APPROVAL.md`, never stop to ask. |
 | `/improve-loop` | `/improve-loop <what to improve>` | Run an autoresearch-style keep-or-rollback loop against a measurable target (software only). |
 | `/ledger` | `/ledger [attempt/decision]` | Append an experiment/decision entry to the project's `LEDGER.md`. |
 | `/debug` | `/debug [the failure]` | Root-cause a failure with a disciplined triage instead of guessing or patching symptoms. |

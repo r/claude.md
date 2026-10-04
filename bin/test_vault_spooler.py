@@ -142,14 +142,14 @@ def test_correlation_key() -> None:
         env = {"VAULT_QUEUE_DIR": str(q)}
         proc = subprocess.run(
             [sys.executable, str(WRITE), "--type", "runbook", "--domain", "infra", "--title", "Bounce DNS",
-             "--host", "host-b", "--key", "runbook:dns-bounce", "--quiet"],
+             "--host", "host-b", "--key", "project:runbook:dns-bounce", "--quiet"],
             input="restart on both resolvers", text=True, capture_output=True,
             env={**os.environ, **env}, timeout=30,
         )
         check("explicit --key accepted", proc.returncode == 0, proc.stderr)
         explicit = [f for f in pending(q) if "Bounce DNS" in f.read_text()][0].read_text()
         check("explicit key wins over derivation",
-              field(explicit, "key") == "runbook:dns-bounce")
+              field(explicit, "key") == "project:runbook:dns-bounce")
 
         enqueue(q, "Host fact", "ram upgraded", kind="note", project="")
         hostonly = [f for f in pending(q) if "ram upgraded" in f.read_text()][0].read_text()
