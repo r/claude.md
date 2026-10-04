@@ -88,6 +88,11 @@ approvals queue rather than blocking (see **Auto mode** in `CLAUDE.md`). Never l
 run of a new spec go fully autonomous — the propose-and-confirm happens once, interactively, before
 it's ever scheduled.
 
+**`/autopilot` is that handshake, given up front.** When I hand a session over with `/autopilot`
+(or say "autopilot"), the instruction *is* the go-ahead: skip propose-and-confirm and run at the
+slider position the work allows, never hotter. It does not move infra off `/safe-change`, and a
+refusal from the classifier, the guardrail or a sandbox is logged and queued, never retried.
+
 ## Non-negotiables carried in from the global rules
 
 - **Never weaken the checker to make a step "pass."** Loosening the gate, relaxing the metric, or

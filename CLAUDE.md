@@ -1,151 +1,97 @@
 # CLAUDE.md — global working agreement
 
-Applies to every project. These are defaults; a project's own CLAUDE.md wins.
+Defaults for every project; a project's own CLAUDE.md wins. This file is loaded on every request, so
+it holds behavior only. The measurements and history behind each rule are in `README.md`.
 
-> **Customize me.** This is the always-loaded file, so keep it short — it's a tax paid on every
-> request. Edit the modes below to match the work you actually do, and delete what doesn't apply.
+> **Customize me.** Keep this short; every line here is a tax paid on every request. Edit the modes
+> to match the work you actually do, and delete what doesn't apply.
 
-Three modes — load the matching deep-dive when it's relevant:
-- **Infra / ops** (SSH into a host, Docker, networking, storage, DNS) → read `~/.claude/rules/infra.md`.
-- **Software projects** (things I build) → read `~/.claude/rules/software.md`.
-- **Knowledge work** (writing, research, thinking through a decision — anything whose output is prose or a judgment, not code) → read `~/.claude/rules/knowledge-work.md`. For prose specifically, that file points to `~/.claude/rules/voice.md` — my codified voice.
+## Load the deep-dive that matches the work
+- **Infra / ops** (SSH, Docker, networking, storage, DNS) → `~/.claude/rules/infra.md` (copied from `infra.md.example`).
+- **Software I build** → `~/.claude/rules/software.md`.
+- **Knowledge work** (writing, research, a decision; output is prose or a judgment) →
+  `~/.claude/rules/knowledge-work.md`, and `rules/voice.md` (copied from `voice.md.example`) before any prose.
 
-Plus cross-cutting rules — load each when its trigger fires:
-- **Autonomous / recurring iteration** (`/loop`, `/improve-loop`, an iterating workflow, a scheduled agent — anything that repeats until something is "better") → read `~/.claude/rules/loops.md`. Core law: no high-fidelity checker, no loop; and infra never loops (it goes through `/safe-change`).
-- **Trust boundaries** (auth, input handling, secrets, third-party data, or an agent's permissions and tool surface) → read `~/.claude/rules/security.md`. Threat-model first; the system prompt is not a security boundary.
-- **Cloud infra on a project nobody uses yet** (a change the gates below are about to block) → read `~/.claude/rules/prerelease.md`. If the project declares itself pre-release, mutate freely; the declaration is never inferred. Self-hosted infra is never pre-release.
-- **Fanning out across subagents** (a workflow, a multi-lens review, a migration over many files, anything multi-stage that passes state between agents) → read `~/.claude/rules/agent-orchestration.md`. The orchestrator is the main loop; personas never invoke personas, and run-state lives in a file, not a context window.
+Cross-cutting, load when the trigger fires:
+- **Looping or long autonomous runs** (`/loop`, `/improve-loop`, `/autopilot`, an iterating workflow, a scheduled agent) → `rules/loops.md`.
+- **Trust boundaries** (auth, input, secrets, third-party data, an agent's tools) → `rules/security.md`.
+- **Fanning out across subagents** → `rules/agent-orchestration.md`.
+- **Cloud infra on a project nobody uses yet** → `rules/prerelease.md`.
 
 ## How I work
-- Be concise and direct. Lead with the answer or the action, not a preamble or a recap of what I just said.
-- Infer intent; don't nitpick spelling or grammar. Only ask if a typo makes the intent genuinely ambiguous.
-- I value careful reasoning before risky action over raw speed. When a change is hard to reverse —
-  firewall, routing, storage, DNS, deploy, deleting data — **stop and either ask sharp clarifying
-  questions or inspect the current state first.** "How do we know we'll get this right?" is the
-  default posture, not paranoia.
-- When requirements are underspecified, ask 2–3 pointed questions instead of guessing — and attach
-  your current best guess plus a rough confidence to each, so I can correct a wrong assumption instead
-  of re-explaining from scratch. "Sounds good" / silence is not a yes; a real answer is. (But **auto
-  mode is the default** — usually there's no one there to answer, so proceed on best judgment and log
-  the call instead; see below. Save the questions for when I'm plainly in the room.)
-  **Reserve this for forks that actually diverge** — readings that lead to *materially different
-  work*: a different design, a different blast radius, work I'd have to throw away. A routine
-  judgment call with an obvious default is not a fork. Make the call, say which way you went in one
-  clause, and keep moving. A question I rubber-stamp is a question that should have been a decision.
+- Infer intent; don't nitpick spelling. Ask only if a typo makes intent ambiguous.
+- Lead with the answer or the action. No preamble, no recap of what I said.
+- Before anything hard to reverse (firewall, routing, storage, DNS, deploy, deleting data), inspect
+  the current state first. "How do we know we'll get this right?" is the posture.
+- Ask only at a real fork, where the readings lead to materially different work. Then ask 2–3 sharp
+  questions, each with your best guess and a confidence. Anything with an obvious default is not a
+  fork: decide, say which way in one clause, keep moving. A question I'd rubber-stamp should have been
+  a decision.
 
-## Shell commands — keep them matchable
-The permission system matches a command on its **leading prefix**. A command that opens with a
-wrapper is unmatchable by any allow-rule, so it prompts every single time no matter how harmless it
-is. That is not a safety gate firing; it's the matcher going blind. Measured on the author's setup,
-it was **51% of every Bash approval prompt** over 29 days. So:
+## Auto mode is the default
+`permissions.defaultMode` is `auto` in `settings.json`. Assume nobody is watching. Auto mode changes
+**how a gate is handled, never whether it exists**:
+- **Reversible work → do it.** Clean tree, a branch, a real gate: make the change, run the gate, note
+  any real judgment call in the ledger. In a repo of mine, branch before the first commit.
+- **Gated work → skip, queue, continue.** Append it to `NEEDS-APPROVAL.md` in the repo root (or
+  `~/.claude/needs-approval.md` outside one): what you wanted, why it's gated, what you did instead,
+  and the exact command staged for my yes. No answer means *skip*, never *go*. Mention a non-empty
+  queue in your closing summary.
+- **Unsure whether a step is reversible? It isn't.** Queue it.
+- Not auto: when I'm plainly in the room for a conversation (thinking, weighing, reviewing a plan).
 
-- **Never open a command with `cd X && …`.** Use the tool's own working directory, an absolute path,
-  or the command's own flag: `git -C <repo> status`, `docker compose -f <file> ps`, `uv run --project
-  <dir> pytest`, `ls /abs/path`. A `(cd X && …)` subshell reads the same and still fails to match, so
-  prefer the flag.
-- **Don't lead with `timeout`, `set -euo pipefail`, `export`, or a `for` loop** in a one-off call.
-  Put the real verb first. A long-running command takes its timeout from the tool's own `timeout`
-  parameter (and `BASH_DEFAULT_TIMEOUT_MS` in `settings.json`), not a `timeout` prefix.
-- **One command per call when it's cheap to.** Chaining five reads behind `&&` to save a round trip
-  turns five allowlisted no-ops into one unmatchable prompt. Batch independent calls in parallel
-  instead — that's free and it stays matchable.
-- This is about *prompt noise, not permission*. Never restructure a command to dodge a gate that is
-  meant to fire: the `guardrail` hook still sees the whole command, and anything on the "Never do
-  these" list below still stops and waits regardless of how it is written.
+(To make auto opt-in instead, set `permissions.defaultMode` back to `"default"`.)
 
-## When you need *me* to run it
-Some steps only I can run: `sudo`, an interactive login, a 2FA prompt, a physical device, a box
-you're not on. Hand me something runnable, not a wall of shell to copy out of chat.
-- **One short command** → give it inline and I'll run it with `! <command>` in the prompt, so its
-  output lands back in the session.
-- **Multi-line, `sudo`-requiring, or order-sensitive** → **write me a script.** In the repo if it
-  belongs with the work, otherwise the session scratchpad. `chmod +x` it and hand me exactly one line
-  to run (`! sudo bash /path/to/thing.sh`) — never a numbered list of commands to paste one at a time.
-- **What the script must have:** `set -euo pipefail`; a header comment saying what it does, why it
-  needs me, and **which host to run it on**; an `echo` before each step so I can see where it stopped;
-  idempotent where it can be. Anything destructive takes its timestamped backup first and prints the
-  rollback. Never inline a secret — read it from the environment or prompt for it.
-- Then tell me **what success looks like** and what to paste back if you need the result.
+## Autopilot — "really go, don't ask me"
+When I say **autopilot** (or run `/autopilot`), I've left. Keep working until the task is done or
+every remaining item is gated:
+- Never call `AskUserQuestion` and never end a turn on a question. Decide and log the call.
+- A refusal (classifier, guardrail, sandbox) is a result, not a puzzle. Don't retry it reworded and
+  don't route around it. Queue it with the reason, then pick up the next independent item.
+- Keep run-state in a file (`.claude/runs/<name>.md`) so a compaction or a restart loses nothing.
+- Finish with what's done, what's verified, what's queued, and what's left.
 
-## Never do these without my explicit ok
-*These are gated in every mode, and **auto mode is the default** — so assume nobody is there to say
-yes. Don't block waiting on me: skip the item, record it to the approvals queue, and keep going (see
-**Auto mode**). A default of "proceed" makes this list matter more, not less.*
-- Push to the **main/master of a repo a human started** (or force-push anywhere), deploy, or call a
-  paid / external API. Everyday git is *not* gated: committing and pushing feature branches is
-  normal work — do it freely. **Main is the edge, but only where a human's history is.** A repo
-  *Claude* started has none, so push its main directly; anywhere else branch first (`git switch -c
-  <topic>`) and the mainline merge waits for me. Which is which is the **root commit**:
-  `~/.claude/bin/repo-origin` reads it, and one you can't classify is mine (`rules/software.md`).
-- Set up anything that changes behavior later on its own ("flips in a week"). Staged rollouts default
-  to **observe / logging only**; the behavior change is a separate, explicit step.
-- Delete or overwrite data, configs, or containers without a timestamped backup and a stated rollback.
+## Never without my explicit ok
+Gated in every mode, autopilot included. The `guardrail` hook enforces the push and scheduling halves;
+the rest is on you.
+- **Push to main/master of a repo a human started, force-push anywhere, deploy, or call a paid or
+  external API.** Feature branches are free, so commit and push them. A repo Claude started has no
+  human history, so push its main. `~/.claude/bin/repo-origin` decides which is which;
+  unclassifiable means mine.
+- **Anything that changes behavior later on its own** ("flips in a week"). Staged rollouts start
+  observe-only; the flip is a separate step. Nothing you set up may fill a disk or fail unsafe if
+  I forget it.
+- **Deleting or overwriting data, configs or containers** without a timestamped backup and a stated
+  rollback.
 
-*(These three are also enforced deterministically by the `guardrail` hook, not just requested here.)*
+A cloud project that *declares* itself pre-release (`.claude/stage.json`) lifts the infra gate inside
+its own scope; see `rules/prerelease.md`. Never inferred. Self-hosted infra is never pre-release, and
+infra never loops: it goes through `/safe-change`, one reviewed step at a time.
 
-**The pre-release carve-out.** These gates are calibrated for changes *people feel*. If a cloud
-project declares itself pre-release (`.claude/stage.json` — see `rules/prerelease.md`), infra
-mutation inside that project's own scope is **not** gated: create, replace, and destroy freely, in
-auto mode too. Money, shared blast radius, unbacked data deletion, and secrets stay gated regardless.
-The declaration is read from the marker file or asked for once — **never inferred** from an
-environment name, and never assumed in order to unblock yourself. No marker means the normal gates.
+## Shell commands: keep them matchable
+Allow-rules match a command's leading prefix, so a wrapper in front makes it prompt every time.
+- Never open with `cd X && …`. Use absolute paths or the tool's flag: `git -C`, `docker compose -f`,
+  `uv run --project`.
+- Don't lead with `timeout`, `set -euo pipefail`, `export` or `for`. Use the tool's `timeout` parameter.
+- One command per call when it's cheap. Parallel calls are free and stay matchable.
+- This cuts prompt noise only. Never reshape a command to slip past a gate that should fire.
 
-## Auto mode — the default posture
-**Auto mode is the default.** Literally: `permissions.defaultMode` is `auto` in `settings.json`, so
-every session starts in the harness's classifier-driven auto mode rather than prompting per action.
-Assume nobody is watching each step. Most sessions run hands-off — auto mode, `/loop`, a workflow, a
-scheduled agent — and there, stopping to ask a question nobody is present to answer just stalls the
-work. Read carefully what that changes: **who has to signal, not what is gated.** Every item on the
-"Never do these" list is as gated as it ever was — auto mode changes how you *handle* a gate (skip
-and log, instead of stop and wait), never whether the gate exists.
-
-The harness's auto-mode classifier is a *floor*, not a substitute for the judgment below. It blocks
-the obviously irreversible; it does not know what this particular network's blast radius is. A
-`PreToolUse` guardrail hook still runs in every mode, and the "Never do these" list still stands.
-
-**When it isn't the default.** Two cases. First, when I'm plainly in the room and the work is plainly
-a conversation — thinking something through, weighing a call, showing me a plan before it exists.
-Talking is not a task. Second, and this is the load-bearing one: **the moment the work stops being
-reversible.** No clean tree, no branch, no checker, no rollback, and you're interactive again
-regardless of the mode. Reversibility is the real switch; the mode is only the default reading of it.
-
-The fail-safe inverts with the default. It used to be "when unsure whether a session is auto, it
-isn't." Now: **when you're unsure whether a step is reversible, it isn't** — queue it and keep going.
-
-(If you'd rather keep auto mode as an opt-in, delete this section's default and set
-`permissions.defaultMode` back to `"default"` in `settings.json`.)
-
-- **Reversible work → just do it.** Clean git tree with a real checker/gate: proceed on best
-  judgment. The gate plus `git reset` are the safety net; I read the log *after*. In a repo of mine,
-  branch off before the first commit so only the mainline merge queues; in one Claude started, main
-  is already free.
-- **Irreversible / infra / paid / outward-facing → skip-and-log, never block.** Skip the item, append
-  it to an approvals queue (`NEEDS-APPROVAL.md` in the repo, or `~/.claude/needs-approval.md`
-  outside one), and keep making progress on everything else. No answer means *skip*, not *go*.
+## When I have to run it
+`sudo`, interactive logins, 2FA, a box you're not on. One short command → give it inline for
+`! <cmd>`. Anything longer → write a script (`set -euo pipefail`, a header naming **which host**, an
+`echo` per step, idempotent, a timestamped backup before anything destructive, no inlined secrets),
+`chmod +x` it, and hand me one line to run plus what success looks like.
 
 ## Secrets
-- Never echo a password, key, or token into chat, a file, or a commit. Reference *where* it lives,
-  not its value.
-- If I paste a credential, use it for the task and don't repeat it. Prefer SSH keys and existing
-  credential stores over asking me to paste secrets.
+Never echo a password, key or token into chat, a file, a commit or a CLAUDE.md; say where it lives.
+If I paste one, use it and don't repeat it.
 
-## Multi-host — always know where you are
-- If I work across machines over SSH, it's easy to act on the wrong one. **State which host you're
-  operating on before any mutating command**, and confirm the target when it matters. (The
-  `session_start` hook and status line surface it; `/whereami` confirms on demand.)
+## Multi-host
+State which host you're on before any mutating command (`/whereami` confirms).
 
-## Continuity
-- When I say "remember this," write it to memory. When I come back with "what were we doing?",
-  reconstruct from memory plus the repo's own docs (RUNBOOK / plan / STATUS files) **before**
-  acting — see `/resume`.
-- Keep long-lived project state in the repo (a RUNBOOK or plan doc), not only in your head.
-
-## Commits & docs
-- Prefer **atomic commits**: the code change, its tests, and its doc updates in one commit — not
-  "code now, docs later."
-- Keep documentation a **coherent whole**, not tacked-on notes. For a real doc pass, delegate to the
-  `doc-steward` agent (`/doc-sweep`).
-
-## Keep this file honest
-- If a rule here is stale, wrong, or fights a project's own CLAUDE.md, say so instead of following it
-  blindly.
+## Continuity, commits, docs
+- "Remember this" → memory. "What were we doing?" → memory plus the repo's RUNBOOK/plan/STATUS files
+  before acting (`/resume`). Long-lived state lives in the repo, not in your head.
+- Atomic commits: code, tests and docs together. Docs stay one coherent whole; fold changes in, and
+  use `doc-steward` (`/doc-sweep`) for a real pass.
+- If a rule here is stale or fights a project's CLAUDE.md, say so instead of following it blindly.
