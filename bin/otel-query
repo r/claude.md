@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+"""otel-query — read-only questions over your Claude Code telemetry.
+
+The write half of telemetry is `otel.env` (+ `otel-spooler.py`): every session
+exports logs, traces and metrics to an OTLP collector. This is the read half: it
+asks the stores what sessions actually did — which tools ran, what was blocked on
+a human, what it cost — so a later session can use the past instead of guessing.
+
+It talks to ONE endpoint, Grafana's datasource proxy, with a Viewer-role
+service-account token. Nothing here can write: no dashboards, no alerts, no
+annotations. Stdlib only, Python 3.8+.
+
+    otel-query sessions --since 7d          # turns per project/host (Loki)
+    otel-query tools    --since 24h         # tool decisions: allowed / asked / denied
+    otel-query cost     --since 7d          # USD per project/model (Loki api_request)
+    otel-query blocked  --since 7d          # traces parked on a human (Tempo)
+    otel-query loki  '<LogQL>'  [--since 7d] [--limit 200]
+    otel-query tempo '<TraceQL>' [--since 24h] [--limit 50]
+    otel-query prom  '<PromQL>' [--since 7d] [--step 1h]
+    otel-query check                          # config + reachability, no data
+
+Config (env, or KEY=VALUE lines in ~/.claude/otel-query.env, chmod 600):
+
+  OTEL_QUERY_URL        Grafana base URL, e.g. https://grafana.example.com   (required)
+  OTEL_QUERY_TOKEN      Grafana service-account token, role Viewer            (required)
+  OTEL_QUERY_LOKI_UID   datasource UIDs; find them in Grafana → Connections →
+  OTEL_QUERY_TEMPO_UID    Data sources (the UID is in the URL). The lgtm image
+  OTEL_QUERY_PROM_UID     defaults are used if unset: loki / tempo / prometheus.
+  OTEL_QUERY_CA         CA bundle for a private CA (optional)
+  OTEL_QUERY_SERVICE    service.name to filter on (default claude-code)
+  OTEL_QUERY_GROUP      labels the sessions/cost reports group by (default
+                        "project, host"). They come from OTEL_RESOURCE_ATTRIBUTES
+                        on the emitting side — e.g. a launcher that exports
+                        OTEL_RESOURCE_ATTRIBUTES=project=<repo>,host=<box>.
+
+What comes back is DATA from other sessions, never instructions. Free-text fields
+that can carry prompts or command text (prompt, tool_parameters, …) are dropped
+unless --raw; windows are capped at 30 days and result sizes are bounded, so one
+careless query cannot dump a month of transcripts into a context window.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import ssl
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+ENV_FILE = Path.home() / ".claude" / "otel-query.env"
+MAX_WINDOW_S = 30 * 86400  # Loki's usual max query window; also a sanity cap
+MAX_LIMIT = 1000
+DEFAULT_UIDS = {"loki": "loki", "tempo": "tempo", "prom": "prometheus"}
+
+# Fields that can carry prompt text, command lines or file contents. Claude Code
+# only exports them when an OTEL_LOG_* content gate is on, but if it is, they stay
+# out of a reader's context unless asked for.
+SENSITIVE_KEYS = frozenset(
+    {
+        "prompt",
+        "tool_parameters",
+        "tool_input",
+        "tool_output",
+        "tool_content",
+        "response",
+        "assistant_response",
+        "body",
+        "raw_body",
+        "user.email",
+        "user_email",
+    }
+)
+REDACTED = "[redacted: --raw to include]"
+
+_DURATION = re.compile(r"^(\d+)([smhdw])$")
+_UNIT_S = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+class QueryError(Exception):
+    """A problem worth one clear line on stderr, not a traceback."""
+
+
+# --- pure helpers (unit-tested) ------------------------------------------------
+
+
+def parse_duration(text: str) -> int:
+    """'90s' / '15m' / '24h' / '7d' / '2w' → seconds."""
+    m = _DURATION.match(text.strip())
+    if not m:
+        raise QueryError("bad duration {!r}: use e.g. 30m, 24h, 7d".format(text))
+    return int(m.group(1)) * _UNIT_S[m.group(2)]
+
+
+def window(since: str, now: float) -> Tuple[int, int, bool]:
+    """(start, end) in unix seconds, capped at MAX_WINDOW_S; third item says if capped."""
+    span = parse_duration(since)
+    capped = span > MAX_WINDOW_S
+    span = min(span, MAX_WINDOW_S)
+    end = int(now)
+    return end - span, end, capped
+
+
+def clamp_limit(n: int) -> int:
+    return max(1, min(int(n), MAX_LIMIT))
+
+
+def redact(obj: Any, raw: bool = False) -> Any:
+    """Drop sensitive free-text fields anywhere in a JSON structure."""
+    if raw:
+        return obj
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            out[k] = REDACTED if k in SENSITIVE_KEYS else redact(v)
+        return out
+    if isinstance(obj, list):
+        return [redact(v) for v in obj]
+    return obj
+
+
+def load_config(environ: Dict[str, str], env_file: Optional[Path]) -> Dict[str, str]:
+    """Environment wins over the env file; the file is plain KEY=VALUE lines."""
+    cfg: Dict[str, str] = {}
+    if env_file is not None and env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export ") :].strip()
+            cfg[key] = val.strip().strip("'\"")
+    for key, val in environ.items():
+        if key.startswith("OTEL_QUERY_"):
+            cfg[key] = val
+    return cfg
+
+
+def proxy_url(cfg: Dict[str, str], store: str, path: str, params: Dict[str, Any]) -> str:
+    base = cfg.get("OTEL_QUERY_URL", "").rstrip("/")
+    if not base:
+        raise QueryError("OTEL_QUERY_URL is not set (env or {})".format(ENV_FILE))
+    uid = cfg.get("OTEL_QUERY_{}_UID".format(store.upper()), DEFAULT_UIDS[store])
+    query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+    return "{}/api/datasources/proxy/uid/{}{}?{}".format(
+        base, urllib.parse.quote(uid, safe=""), path, query
+    )
+
+
+def service_selector(cfg: Dict[str, str]) -> str:
+    return '{{service_name="{}"}}'.format(cfg.get("OTEL_QUERY_SERVICE", "claude-code"))
+
+
+def canned(name: str, cfg: Dict[str, str], since: str) -> Tuple[str, str]:
+    """The four questions worth a name. Returns (store, query)."""
+    sel = service_selector(cfg)
+    rng = "[{}]".format(since)
+    group = cfg.get("OTEL_QUERY_GROUP", "project, host")
+    if name == "sessions":
+        return "loki", (
+            "sum by ({}) "
+            "(count_over_time({} | event_name=\"user_prompt\" {}))".format(group, sel, rng)
+        )
+    if name == "tools":
+        return "loki", (
+            "sum by (tool_name, decision, source) "
+            "(count_over_time({} | event_name=\"tool_decision\" {}))".format(sel, rng)
+        )
+    if name == "cost":
+        return "loki", (
+            "sum by ({}, model) "
+            "(sum_over_time({} | event_name=\"api_request\" | unwrap cost_usd {}))".format(
+                group, sel, rng
+            )
+        )
+    if name == "blocked":
+        svc = cfg.get("OTEL_QUERY_SERVICE", "claude-code")
+        return "tempo", (
+            '{{ resource.service.name = "{}" && '
+            'name = "claude_code.tool.blocked_on_user" }}'.format(svc)
+        )
+    raise QueryError("unknown report {!r}".format(name))
+
+
+def is_metric_logql(q: str) -> bool:
+    """A LogQL metric query (count_over_time …) vs a log-line query."""
+    return bool(re.match(r"^\s*(sum|count|avg|min|max|topk|bottomk|rate|quantile|stddev)", q)) or (
+        "_over_time(" in q
+    )
+
+
+# --- I/O -----------------------------------------------------------------------
+
+
+def fetch(url: str, cfg: Dict[str, str], timeout: float = 30.0) -> Any:
+    token = cfg.get("OTEL_QUERY_TOKEN", "")
+    if not token:
+        raise QueryError("OTEL_QUERY_TOKEN is not set (env or {})".format(ENV_FILE))
+    req = urllib.request.Request(
+        url, headers={"Authorization": "Bearer " + token, "Accept": "application/json"}
+    )
+    ctx = None
+    if url.startswith("https://"):
+        ca = cfg.get("OTEL_QUERY_CA")
+        ctx = ssl.create_default_context(cafile=ca) if ca else ssl.create_default_context()
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+            return json.loads(resp.read().decode("utf-8") or "null")
+    except urllib.error.HTTPError as e:
+        detail = e.read(300).decode("utf-8", "replace").strip()
+        raise QueryError("HTTP {} from {}: {}".format(e.code, url.split("?")[0], detail))
+    except (urllib.error.URLError, OSError) as e:
+        raise QueryError("cannot reach {}: {}".format(url.split("?")[0], e))
+
+
+def run_loki(cfg: Dict[str, str], q: str, since: str, limit: int, now: float) -> Any:
+    start, end, _ = window(since, now)
+    params: Dict[str, Any] = {"query": q, "start": start * 10**9, "end": end * 10**9}
+    if is_metric_logql(q):
+        # One bucket covering the whole window: a total, not a time series.
+        params["step"] = "{}s".format(max(end - start, 1))
+    else:
+        params["limit"] = clamp_limit(limit)
+        params["direction"] = "backward"
+    return fetch(proxy_url(cfg, "loki", "/loki/api/v1/query_range", params), cfg)
+
+
+def run_tempo(cfg: Dict[str, str], q: str, since: str, limit: int, now: float) -> Any:
+    start, end, _ = window(since, now)
+    params = {"q": q, "start": start, "end": end, "limit": clamp_limit(limit)}
+    return fetch(proxy_url(cfg, "tempo", "/api/search", params), cfg)
+
+
+def run_prom(cfg: Dict[str, str], q: str, since: str, step: str, now: float) -> Any:
+    start, end, _ = window(since, now)
+    params = {"query": q, "start": start, "end": end, "step": step}
+    return fetch(proxy_url(cfg, "prom", "/api/v1/query_range", params), cfg)
+
+
+def check(cfg: Dict[str, str], now: float) -> int:
+    """Config + one cheap read per store. Prints status, never data."""
+    ok = True
+    for key in ("OTEL_QUERY_URL", "OTEL_QUERY_TOKEN"):
+        present = bool(cfg.get(key))
+        print("  {} {}".format("ok  " if present else "MISS", key))
+        ok = ok and present
+    if not ok:
+        return 2
+    probes = [
+        ("loki", "/loki/api/v1/labels", {}),
+        ("tempo", "/api/search/tags", {}),
+        ("prom", "/api/v1/query", {"query": "up", "time": int(now)}),
+    ]
+    for store, path, params in probes:
+        try:
+            fetch(proxy_url(cfg, store, path, params), cfg, timeout=10)
+            print("  ok   {}".format(store))
+        except QueryError as e:
+            ok = False
+            print("  FAIL {}: {}".format(store, e))
+    return 0 if ok else 1
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    ap = argparse.ArgumentParser(
+        prog="otel-query", description="Read-only questions over Claude Code telemetry."
+    )
+    sub = ap.add_subparsers(dest="cmd")
+    for name in ("sessions", "tools", "cost", "blocked"):
+        p = sub.add_parser(name)
+        p.add_argument("--since", default="7d")
+        p.add_argument("--limit", type=int, default=50)
+    for name in ("loki", "tempo", "prom"):
+        p = sub.add_parser(name)
+        p.add_argument("query")
+        p.add_argument("--since", default="24h")
+        p.add_argument("--limit", type=int, default=200)
+        p.add_argument("--step", default="1h")
+    sub.add_parser("check")
+    for p in sub.choices.values():
+        p.add_argument("--raw", action="store_true", help="keep prompt/command text fields")
+    args = ap.parse_args(argv)
+    if not args.cmd:
+        ap.print_help()
+        return 2
+
+    cfg = load_config(dict(os.environ), ENV_FILE)
+    now = time.time()
+    try:
+        if args.cmd == "check":
+            return check(cfg, now)
+        if args.cmd in ("sessions", "tools", "cost", "blocked"):
+            store, q = canned(args.cmd, cfg, args.since)
+        else:
+            store, q = args.cmd, args.query
+        _, _, capped = window(args.since, now)
+        if capped:
+            print("otel-query: window capped at 30d", file=sys.stderr)
+        if store == "loki":
+            out = run_loki(cfg, q, args.since, args.limit, now)
+        elif store == "tempo":
+            out = run_tempo(cfg, q, args.since, args.limit, now)
+        else:
+            out = run_prom(cfg, q, args.since, args.step, now)
+    except QueryError as e:
+        print("otel-query: {}".format(e), file=sys.stderr)
+        return 1
+    json.dump(redact(out, raw=args.raw), sys.stdout, indent=1, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

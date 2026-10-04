@@ -58,13 +58,15 @@ relevant.** Almost every decision below follows from that.
 │   ├── doc_drift.sh       Nudges when code has outrun docs.
 │   ├── vault_curator.py   Detached background agent that records durable knowledge (+ its test).
 │   ├── vault_nudge.py     Zero-cost fallback: nudges instead of auto-recording (+ its test).
+│   ├── denial_log.py      PermissionDenied: one line per classifier refusal in denials.jsonl (+ its test).
 │   ├── morph-global-*.sh  Prompt/Stop pair that records each session's trace (opt-in).
 │   └── experimental/      Prototypes, NOT wired into settings.json (webfetch revalidation cache).
 ├── bin/                Small tracked utilities, plain scripts with no Claude Code knowledge:
 │                        claude-bootstrap (set up a second machine), morph-mirror (+ its test),
 │                        morph-recover-orphans (assemble traces for sessions that died),
 │                        repo-origin (who started a repo — the mainline gate's overlay),
-│                        otel-spooler (offline OTLP buffer), vault-write + vault-spooler
+│                        otel-spooler (offline OTLP buffer), otel-query (read the telemetry
+│                        back: Loki/Tempo/Prometheus via Grafana, read-only), vault-write + vault-spooler
 │                        (queue notes offline, deliver on reconnect; + tests, + systemd/launchd units),
 │                        run-tests (every test in here at once; --lint adds ruff + shellcheck).
 ├── skills/             Model-invoked procedures (add your own; see skills/README.md).
@@ -223,6 +225,21 @@ problem one layer down. `env` came off that list for a different reason: it is n
 still inspects every command and can deny outright. Worth knowing before you try this: an agent
 cannot apply its own allowlist, because widening its own permission rules trips the auto-mode
 classifier's self-modification check. Correctly. Author the change, then apply it by hand.
+
+**A long run stalls on its own hand-off, not on the classifier — and `$defaults` is load-bearing.**
+Thirty days of transcripts (~20,000 sessions, mined 2026-10-04) held 71 auto-mode classifier
+refusals across 33 sessions. None tripped the pause (three in a row or twenty in a session; the
+worst was two and ten). What ended the runs was the refusal's own text — "get as much done as you
+can, then STOP and explain to the user" — which the model obeyed by writing "I need you to run
+this" into an empty room. So `CLAUDE.md` now defines a refusal as a gate event: queue it, one line,
+carry on, never retry it in another form; and `/autopilot` makes the hand-off explicit. The other
+third of the refusals were self-inflicted. An `autoMode` list in `settings.json` *replaces* the
+built-in one unless its first entry is the literal `"$defaults"`, so a two-line `allow` silently
+discarded seventeen built-in exceptions (read-only operations, local file operations, pushing to the
+session's own repo), and an `environment` written during one project's session told the classifier
+that project was the only trusted repo, for every session after. `claude auto-mode config` shows the
+effective lists; check it after any edit. `hooks/denial_log.py` (PermissionDenied) now writes every
+refusal to `~/.claude/denials.jsonl`, so the next audit is a `jq` line rather than a transcript mine.
 
 **Test a hook the way the harness runs it — the runtime floor is the oldest box you have.** The same
 fail-open design that makes a guardrail bug harmless makes a guardrail *import* error invisible:
