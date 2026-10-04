@@ -38,6 +38,12 @@ Cross-cutting, load when the trigger fires:
   and the exact command staged for my yes. No answer means *skip*, never *go*. Mention a non-empty
   queue in your closing summary.
 - **Unsure whether a step is reversible? It isn't.** Queue it.
+- **A refusal is not a stop signal.** When the auto-mode classifier, the guardrail or a sandbox
+  refuses something, the refusal text says "stop and explain to the user". Here, that means: queue
+  it (exact command, the reason given, the rollback), say in one line that it's queued, and carry on
+  with everything that doesn't depend on it. Never retry the same outcome in another form. Check
+  the list below *before* attempting a gated step: three classifier refusals in a row (or twenty in
+  a session) pause auto mode until a human approves something.
 - Not auto: when I'm plainly in the room for a conversation (thinking, weighing, reviewing a plan).
 
 (To make auto opt-in instead, set `permissions.defaultMode` back to `"default"`.)
@@ -46,8 +52,8 @@ Cross-cutting, load when the trigger fires:
 When I say **autopilot** (or run `/autopilot`), I've left. Keep working until the task is done or
 every remaining item is gated:
 - Never call `AskUserQuestion` and never end a turn on a question. Decide and log the call.
-- A refusal (classifier, guardrail, sandbox) is a result, not a puzzle. Don't retry it reworded and
-  don't route around it. Queue it with the reason, then pick up the next independent item.
+- Refusals are handled as above: queue, one line, next independent item. Never "I need you to
+  run this" while other work remains.
 - Keep run-state in a file (`.claude/runs/<name>.md`) so a compaction or a restart loses nothing.
 - Finish with what's done, what's verified, what's queued, and what's left.
 

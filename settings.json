@@ -145,6 +145,13 @@
           { "type": "command", "command": "$HOME/.claude/hooks/checkpoint.py" }
         ]
       }
+    ],
+    "PermissionDenied": [
+      {
+        "hooks": [
+          { "type": "command", "command": "$HOME/.claude/hooks/denial_log.py" }
+        ]
+      }
     ]
   }
 }

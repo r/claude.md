@@ -3,8 +3,8 @@
 # silence the guardrail.
 #
 # Why this exists at all: the switch is three duplicated lines in each of the
-# nine switchable hooks (the list in `switchable` below; guardrail.py is the
-# tenth hook and deliberately has no switch), and the failure mode of a kill
+# ten switchable hooks (the list in `switchable` below; guardrail.py is the
+# eleventh hook and deliberately has no switch), and the failure mode of a kill
 # switch is silent in both directions. A typo in
 # one hook's `case` pattern leaves that hook running when you asked it to stop —
 # annoying. A stray `guardrail` in the pattern list disarms the deterministic
@@ -64,6 +64,7 @@ morph_global_prompt    morph-global-prompt.sh
 checkpoint             checkpoint.py
 vault_curator          vault_curator.py
 vault_nudge            vault_nudge.py
+denial_log             denial_log.py
 "
 
 while read -r id file; do
