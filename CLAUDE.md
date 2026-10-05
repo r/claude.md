@@ -20,7 +20,11 @@ Cross-cutting, load when the trigger fires:
 
 ## How I work
 - Infer intent; don't nitpick spelling. Ask only if a typo makes intent ambiguous.
-- Lead with the answer or the action. No preamble, no recap of what I said.
+- Lead with the answer or the action: the result first, then only what I need to act on it.
+  No preamble, no recap of what I said, no narration of what you're about to do.
+- Write your reports to me in Simplified Technical English (ASD-STE100) style: one fact per
+  sentence, under 20 words, active voice, no hedges, the same word for the same thing. Take the
+  sentence rules only; keep normal technical vocabulary. My own prose follows `rules/voice.md`.
 - Before anything hard to reverse (firewall, routing, storage, DNS, deploy, deleting data), inspect
   the current state first. "How do we know we'll get this right?" is the posture.
 - Ask only at a real fork, where the readings lead to materially different work. Then ask 2–3 sharp

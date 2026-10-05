@@ -25,6 +25,10 @@ of **150–200 standing instructions** before compliance starts to slip, and aut
 So the organizing principle is: **say the least that changes behavior, and load depth only when it's
 relevant.** Almost every decision below follows from that.
 
+The reporting register borrows four rules from ASD-STE100 (via
+[0xpili/simplified-technical-english](https://github.com/0xpili/simplified-technical-english)):
+short sentences, one idea each, active voice, no vague words.
+
 ---
 
 ## Layout
