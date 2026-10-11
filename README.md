@@ -431,6 +431,25 @@ you're not looking. Spooler credentials live in `~/.config/*.env`, outside the t
 
 ---
 
+## Beside other tools
+
+Nothing here needs anything beyond Claude Code: `install.sh` into an empty home is the whole
+setup (`bin/test_install.sh` proves it). Two tools from the same workshop pair with it, each
+optional, each read through a documented surface and each absent without a trace:
+
+- **[rota](https://github.com/r/rota)**, a multi-account launcher. When a session runs under it,
+  `hooks/statusline.sh` adds rota's two rows (seat, windows, state) from the `bar.txt` the
+  supervisor keeps, and stands down when `ROTA_BAR=1` says a terminal bar already shows them.
+  Without rota the status line is `host │ dir ⎇ branch │ model` and nothing else.
+- **[corral](https://github.com/r/corral)**, a per-session sandbox. `rules/containment.md` is
+  what Claude reads when it finds itself inside one: what is writable, how to ask for a grant,
+  how to tell a wall from a broken machine. It loads on the trigger and costs nothing outside.
+
+rota and corral pair with each other too (rota's `claude_wrapper`), and all three together is one
+person's setup; any one, or any two, stands alone.
+
+---
+
 ## Credit
 
 Distilled from a working private setup, and shared so others can fork a point of view rather than
