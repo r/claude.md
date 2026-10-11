@@ -100,6 +100,9 @@ The full personalization walkthrough is [docs/ADOPTING.md](docs/ADOPTING.md).
 # every test in the config — offline, scratch dirs only, nothing live is touched
 ~/.claude/bin/run-tests
 
+`bin/test_install.sh` (in the runner's list) installs this tree into a throwaway home and
+checks what landed: a quick proof that the copy you have is whole.
+
 # add the linters too, if you have ruff and/or shellcheck (both optional)
 ~/.claude/bin/run-tests --lint
 ```
