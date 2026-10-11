@@ -39,3 +39,15 @@ if br=$(git -C "$cwd" rev-parse --abbrev-ref HEAD 2>/dev/null); then
 fi
 
 printf '%s │ %s%s │ %s' "$host" "$short" "$git_part" "${model:-Claude}"
+
+# rota (https://github.com/r/rota): when this session runs under it, its
+# supervisor renders the seat, windows and state into the control dir (rota's
+# docs/status-file.md). Skipped where a terminal bar already shows it
+# (ROTA_BAR=1) -- the same row twice is noise. Nothing printed without rota.
+bar="${ROTA_CONTROL_DIR:+$ROTA_CONTROL_DIR/bar.txt}"
+if [ -n "$bar" ] && [ "${ROTA_BAR:-}" != "1" ] && [ -r "$bar" ]; then
+  r1=""; r2=""
+  { IFS= read -r r1; IFS= read -r r2; } < "$bar"
+  [ -n "$r1" ] && printf '\n%s' "$r1"
+  if [ -n "$r2" ]; then printf '\n%s' "$r2"; fi
+fi

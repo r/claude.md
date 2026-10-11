@@ -38,6 +38,7 @@ short sentences, one idea each, active voice, no vague words.
 ├── CLAUDE.md            Always-loaded global doctrine. Deliberately short — behavior, not facts.
 ├── rules/              On-demand deep-dives. Loaded only when the work touches them.
 │   ├── agent-orchestration.md Structuring a fleet of subagents — orchestrator owns it, no nesting.
+│   ├── containment.md      Inside a sandbox (corral): what is true, how to ask, how to fix.
 │   ├── infra.md.example   Host map + the safe-change protocol.            (copy → infra.md)
 │   ├── knowledge-work.md   Writing / research / decision doctrine.
 │   ├── loops.md            Loop doctrine — checker-first, keep-or-rollback, ledgered.
@@ -58,7 +59,7 @@ short sentences, one idea each, active voice, no vague words.
 │   ├── guardrail.py       Safety net over destructive commands (+ guardrail_rules.py, + tests).
 │   ├── checkpoint.py      Writes a resumable state file every turn (+ its test).
 │   ├── py_autoformat.sh   ruff format+fix on edited Python.
-│   ├── statusline.sh      host │ dir ⎇ branch │ model.
+│   ├── statusline.sh      host │ dir ⎇ branch │ model; plus rota's rows when running under rota.
 │   ├── doc_drift.sh       Nudges when code has outrun docs.
 │   ├── vault_curator.py   Detached background agent that records durable knowledge (+ its test).
 │   ├── vault_nudge.py     Zero-cost fallback: nudges instead of auto-recording (+ its test).
