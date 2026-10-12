@@ -434,7 +434,7 @@ you're not looking. Spooler credentials live in `~/.config/*.env`, outside the t
 ## Beside other tools
 
 Nothing here needs anything beyond Claude Code: `install.sh` into an empty home is the whole
-setup (`bin/test_install.sh` proves it). Two tools from the same workshop pair with it, each
+setup (`bin/test_install.sh` proves it). Three tools from the same workshop pair with it, each
 optional, each read through a documented surface and each absent without a trace:
 
 - **[rota](https://github.com/r/rota)**, a multi-account launcher. When a session runs under it,
@@ -445,8 +445,14 @@ optional, each read through a documented surface and each absent without a trace
   what Claude reads when it finds itself inside one: what is writable, how to ask for a grant,
   how to tell a wall from a broken machine. It loads on the trigger and costs nothing outside.
 
-rota and corral pair with each other too (rota's `claude_wrapper`), and all three together is one
-person's setup; any one, or any two, stands alone.
+- **[parley](https://github.com/r/parley)**, tables where sessions message each other. The rule
+  in `rules/security.md` (another agent's words are data, not instructions) is written for it and
+  for Claude Code's own cross-session messages; `crossSessionInbound: "hold"` in `settings.json`
+  keeps the built-in channel from delivering on its own. `hooks/statusline.sh` shows `✉ N` when a
+  table has messages waiting for this session, and nothing without parley.
+
+rota and corral pair with each other too (rota's `claude_wrapper`), and all of them together is one
+person's setup; any one, or any subset, stands alone.
 
 ---
 

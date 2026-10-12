@@ -40,6 +40,20 @@ fi
 
 printf '%s │ %s%s │ %s' "$host" "$short" "$git_part" "${model:-Claude}"
 
+# parley: an unread count, when another session has written to this one at a
+# table (parley's docs/interfaces.md). Display-only, kept by parley's steward;
+# the file is named by the session corral named, else by this zellij pane.
+# Skipped where a zellij bar already shows it (ROTA_BAR=1). Nothing without parley.
+pid_file=""
+if [ -n "${PARLEY_SESSION:-}" ]; then pid_file="$HOME/.parley/status/$PARLEY_SESSION.unread"
+elif [ -n "${ZELLIJ_SESSION_NAME:-}" ] && [ -n "${ZELLIJ_PANE_ID:-}" ]; then
+  pid_file="$HOME/.parley/status/${ZELLIJ_SESSION_NAME}-p${ZELLIJ_PANE_ID}.unread"
+fi
+if [ -n "$pid_file" ] && [ "${ROTA_BAR:-}" != "1" ] && [ -r "$pid_file" ]; then
+  n=$(head -c 12 "$pid_file" | tr -cd '0-9')
+  [ -n "$n" ] && [ "$n" != 0 ] && printf ' │ ✉ %s' "$n"
+fi
+
 # rota (https://github.com/r/rota): when this session runs under it, its
 # supervisor renders the seat, windows and state into the control dir (rota's
 # docs/status-file.md). Skipped where a terminal bar already shows it
