@@ -26,7 +26,10 @@ Each rule has:
 `bash` rules are matched against each command SEGMENT (split on ; & | newline)
 after leading sudo/env/wrappers are stripped, so a `^` anchors to the start of
 an actual command — prose mentions of dangerous words (e.g. in a commit
-message) don't trip it. `write` rules scan Write/Edit/MultiEdit content.
+message) don't trip it. The body of a heredoc (`cat > f <<'EOF' … EOF`) is not
+scanned: it is a file's content, not commands. The exception is a heredoc a
+shell reads (`bash <<EOF`, `ssh host bash -s <<'EOF'`), whose lines are judged
+like any other segment. `write` rules scan Write/Edit/MultiEdit content.
 
 To tune the guardrail, edit THIS file — no changes to guardrail.py needed.
 Run `python3 test_guardrail.py` afterwards; it covers every rule below.

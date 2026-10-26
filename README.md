@@ -181,7 +181,10 @@ machine without PyYAML the guardrail couldn't load its rules and silently allowe
 command. A control you can disarm by **not** installing something is not a control. (Raw strings
 rather than JSON, too: the rules are regex-heavy, and backslash-doubling in a safety file is an error
 hazard.) It matches at *command-segment start* so a dangerous word buried in an argument doesn't
-trip it. Two
+trip it, and a heredoc body is data, not commands: `cat > notes.md <<'EOF'` followed by a line that
+begins with `at` used to ask about the `at` scheduler (it stopped three unattended builds in one
+week, 2026-10). The one exception is a heredoc a shell reads (`bash <<EOF`, `ssh host bash -s
+<<'EOF'`): those lines run, so the rules still judge them. Two
 tiers: **deny** the catastrophic (wipe a disk/root), and **ask** on the destructive-but-legitimate
 (destroy a dataset, prune volumes, force-push) and the *agency* cases you never want done unprompted
 (a push that lands on **main/master**; schedule an unattended `cron`/`at`/systemd job). Everyday git

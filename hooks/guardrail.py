@@ -4,8 +4,9 @@ safe-change rules.
 
 The specifics live in guardrail_rules.py (action + why + regexes). This file
 is just the engine: for a Bash command it checks each command segment (leading
-sudo/env stripped, so prose mentions don't trip it); for Write/Edit it scans the
-content for secrets. FAIL-OPEN by design — any error allows the action, because
+sudo/env stripped, so prose mentions don't trip it; a heredoc body is data, not
+commands, unless a shell reads it); for Write/Edit it scans the content for
+secrets. FAIL-OPEN by design — any error allows the action, because
 a bug here must never block every tool call across every session and host.
 
 STDLIB ONLY — deliberately. Fail-open plus a third-party import is a trap: the
@@ -38,6 +39,14 @@ from typing import Any, Callable, Dict, Optional
 
 WRAPPER = re.compile(r"^(?:\s*(?:\w+=\S+|sudo|nohup|time|env|command|exec)\s+)*")
 SEGMENT = re.compile(r"[;&|\n]+")
+# A heredoc operator and its delimiter word: `<<EOF`, `<<-EOF`, `<<'EOF'`, `<<"EOF"`,
+# `<<\EOF`. Not `<<<` (a here-string: one word, no body). The quoting of the word
+# changes expansion, not where the body ends, so it is read and dropped.
+HEREDOC = re.compile(r"<<(-?)\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([^\s;&|<>()]+))")
+# Commands that run a heredoc body AS COMMANDS. Fed to anything else (`cat`,
+# `tee`, `python3 -`, `git commit -F -`), the body is data: a file's content,
+# a commit message, source code in another language.
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh", "ssh", "eval", "su"}
 DEFAULT_BRANCHES = {"main", "master"}
 PUSH_REF_PREFIX = "refs/heads/"
 # Dict[str, Any], NOT `dict[str, Any]` — same trap as BranchFn below, one
@@ -120,6 +129,97 @@ def push_targets_default(segment: str, branch_of: BranchFn) -> bool:
     return False
 
 
+def _heredoc_starts(line: str) -> list[tuple[bool, str]]:
+    """Every heredoc opened on this line, in order: (strip_tabs, delimiter).
+
+    Operators inside single or double quotes are text, not redirections
+    (`echo "see <<EOF"` opens nothing). A `<<<` here-string opens nothing either.
+    """
+    starts: list[tuple[bool, str]] = []
+    quote = ""
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            i += 1
+            continue
+        if ch == "\\":
+            i += 2
+            continue
+        if line.startswith("<<", i):
+            if line.startswith("<<<", i):
+                i += 3
+                continue
+            match = HEREDOC.match(line, i)
+            if match:
+                word = match.group(2) or match.group(3) or match.group(4)
+                starts.append((match.group(1) == "-", word))
+                i = match.end()
+                continue
+        i += 1
+    return starts
+
+
+def _feeds_a_shell(line: str) -> bool:
+    """True when the heredoc on this line is read by a shell, so its body runs.
+
+    `bash <<EOF`, `ssh host bash -s <<'EOF'`, `docker exec -i c sh <<EOF`: the
+    body is commands, and the rules apply to each of its lines as to any other
+    segment. The words before the operator are the command and its arguments;
+    `sudo`, `env` and friends in front do not change what reads the body.
+    """
+    head = line.split("<<", 1)[0]
+    for segment in SEGMENT.split(head):
+        words = WRAPPER.sub("", segment.strip()).split()
+        if any(word.rsplit("/", 1)[-1] in SHELLS for word in words):
+            return True
+    return False
+
+
+def strip_heredocs(command: str) -> str:
+    """The command with each heredoc body removed, unless a shell reads it.
+
+    The engine splits a command on newlines and judges every line as a command.
+    A heredoc body is not one: `cat > notes.md <<'EOF'` followed by a line that
+    begins with `at` is prose, and this used to ask about the `at` scheduler
+    (three paddock milestones stopped on it, 2026-10). So the body of a heredoc
+    is dropped before the split, and the closing delimiter with it; the line that
+    opens it stays, so the command itself is still judged. A body a shell reads
+    (`bash <<EOF`, `ssh host bash -s <<EOF`) stays too: those lines ARE commands,
+    and `rm -rf /` inside one is still denied.
+
+    An unterminated heredoc runs to the end of the command. Several heredocs on
+    one line take their bodies in order, as the shell does. `<<-` lets the
+    closing word carry leading tabs.
+    """
+    lines = command.split("\n")
+    kept: list[str] = []
+    pending: list[tuple[bool, str]] = []  # bodies still to read, in order
+    in_shell_body = False
+    for line in lines:
+        if pending:
+            strip_tabs, word = pending[0]
+            closer = line.lstrip("\t") if strip_tabs else line
+            if closer == word:
+                pending.pop(0)
+            elif in_shell_body:
+                kept.append(line)
+            continue
+        kept.append(line)
+        pending = _heredoc_starts(line)
+        in_shell_body = bool(pending) and _feeds_a_shell(line)
+    return "\n".join(kept)
+
+
 def load_rules() -> dict[str, list[Rule]]:
     # Sibling module, stdlib import — no parser, no dependency, nothing to install.
     # This import cannot fail for a reason the user can't see, which is the point.
@@ -162,7 +262,7 @@ def classify(
     which both default to "unknown" (conservative) so tests stay deterministic.
     """
     if tool == "Bash":
-        command = tool_input.get("command", "") or ""
+        command = strip_heredocs(tool_input.get("command", "") or "")
         for segment in SEGMENT.split(command):
             hit = _first_hit(
                 rules.get("bash", []),

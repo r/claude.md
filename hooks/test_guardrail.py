@@ -89,6 +89,31 @@ CASES: list[tuple[str, dict[str, object], str | None]] = [
     ("Bash", {"command": "systemctl restart nginx"}, None),
     # allow — prose that merely mentions dangerous words doesn't trip destructive rules
     ("Bash", {"command": 'echo "cleanup: rm -rf roots, mkfs, dd, zfs destroy"'}, None),
+    # allow — a heredoc body is data, not commands: every line used to be judged as
+    # one, and a file line beginning with `at` asked about the `at` scheduler.
+    ("Bash", {"command": "cat > notes.md <<'EOF'\nat the end of the day\nEOF"}, None),
+    ("Bash", {"command": "cat <<EOF > script.sh\nrm -rf /\nEOF"}, None),  # a file's content
+    ("Bash", {"command": "git commit -F - <<'EOF'\nfix\n\nat first the parser…\nEOF"}, None),
+    ("Bash", {"command": "python3 - <<'PY'\nat = 1\nPY"}, None),
+    ("Bash", {"command": 'cat <<"EOF"\nat 09:00\nEOF'}, None),  # double-quoted word
+    ("Bash", {"command": "cat <<\\EOF\nat 09:00\nEOF"}, None),  # backslash-quoted word
+    ("Bash", {"command": "cat <<-EOF\n\tat 09:00\n\tEOF"}, None),  # <<- : tabs before the closer
+    ("Bash", {"command": "cat <<EOF\nat 09:00"}, None),  # unterminated: body to the end
+    ("Bash", {"command": "cmd <<A <<B\nat 1\nA\nat 2\nB"}, None),  # two bodies, in order
+    # ask — what follows a closed heredoc is a command again
+    ("Bash", {"command": "cat <<EOF\nnotes\nEOF\nat 09:00"}, "ask"),
+    ("Bash", {"command": "cat <<-EOF\n\tnotes\n\tEOF\nat 09:00"}, "ask"),
+    ("Bash", {"command": "cat <<EOF > f\n  EOF\nEOF\nat 09:00"}, "ask"),  # indented ≠ closer
+    # ask / deny — a quoted `<<` or a here-string opens no body
+    ("Bash", {"command": 'echo "<<EOF"\nat 09:00'}, "ask"),
+    ("Bash", {"command": "grep x <<< 'at home'\nat 09:00"}, "ask"),
+    # deny / ask — a heredoc a SHELL reads is commands, and the rules still apply
+    ("Bash", {"command": "bash <<'EOF'\nrm -rf /\nEOF"}, "deny"),
+    ("Bash", {"command": "ssh box bash -s <<'EOF'\nzfs destroy tank/home\nEOF"}, "ask"),
+    ("Bash", {"command": "ssh box <<'EOF'\nzpool destroy tank\nEOF"}, "ask"),
+    ("Bash", {"command": "docker exec -i app sh <<EOF\ncrontab /tmp/jobs\nEOF"}, "ask"),
+    ("Bash", {"command": "sudo /bin/bash <<EOF\nmkfs.ext4 /dev/sdb\nEOF"}, "deny"),
+    ("Bash", {"command": "bash <<EOF\necho fine\nEOF"}, None),  # a harmless shell body
     # write — secrets
     ("Write", {"content": "-----BEGIN OPENSSH PRIVATE KEY-----\nx"}, "ask"),
     (
@@ -357,6 +382,9 @@ def test_end_to_end_under_system_python() -> None:
     assert decide("ls -la") is None, "ordinary command should pass silently"
     # The refspec path specifically — this is where removeprefix() used to blow up.
     assert decide("git push origin refs/heads/main") == "ask"
+    # A heredoc body, over stdin with its real newlines: data, not an `at` command.
+    assert decide("cat > t.rs <<'EOF'\nat the end\nEOF") is None
+    assert decide("bash <<'EOF'\nrm -rf /\nEOF") == "deny", "a shell's heredoc is commands"
 
 
 if __name__ == "__main__":
